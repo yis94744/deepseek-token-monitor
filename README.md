@@ -16,13 +16,21 @@
 ## 下载安装
 
 - 前往 [Releases](https://github.com/yis94744/deepseek-token-monitor/releases) 下载安装程序
-- 首次启动会引导填写 API Key，之后可在软件设置中随时修改
+- 首次启动会引导填写 API Key，可跳过（跳过仅影响余额显示，用量照常统计），之后可在设置页修改
 
 ## 使用方法
 
+**方式一：Codex / CC Switch（推荐，无需改任何地址）**
+
+1. 启动软件即可，首次启动的 API Key 引导可以跳过
+2. 软件会只读 CC Switch 的本地数据库 `~/.cc-switch/cc-switch.db`，每 2 秒自动同步
+3. Codex 里的对话用量会自动进入统计，不经过任何转发，不影响响应速度
+
+**方式二：其他客户端走本地代理（可选）**
+
 1. 将客户端 DeepSeek 的 `base_url` 从 `https://api.deepseek.com` 改为 `http://127.0.0.1:8787`
-2. 请求需开启 `"stream_options": {"include_usage": true}` 才能返回精确的 token 用量
-3. 使用 CC Switch 或 Codex 对话时无需修改地址，直接读取 CC Switch 记录即可
+2. 流式请求需开启 `"stream_options": {"include_usage": true}` 才能返回精确的 token 用量
+3. 请求由本地代理转发到 DeepSeek 官方接口并自动计费
 
 ## 配置说明
 
@@ -31,7 +39,7 @@
 - `api_key`：DeepSeek API Key，用于查询余额
 - `proxy_port`：本地代理监听端口
 - `models`：各模型输入/输出 token 单价与计费规则
-- `cc_switch`：CC Switch 同步设置
+- `cc_switch`：CC Switch 同步设置（默认开启，读取 `~/.cc-switch/cc-switch.db`）
 
 ## 源码运行 / 打包
 
