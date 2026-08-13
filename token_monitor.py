@@ -7,11 +7,8 @@
 - 内置本地代理 http://127.0.0.1:8787，自动统计并计费 DeepSeek API 调用
 - 每天 00:00 自动日结、每周一自动周结、每月 1 日自动月结
 
-默认统计方式：直接只读 CC Switch 本地数据库（~/.cc-switch/cc-switch.db），
-Codex 等经 CC Switch 的对话无需改地址即可自动统计；
-如需统计其他直连 DeepSeek API 的客户端，可把 base_url 改成
-http://127.0.0.1:8787 走本地代理，流式请求需加
-"stream_options": {"include_usage": true}。
+使用前提：把调用 DeepSeek 的 base_url 改成 http://127.0.0.1:8787；
+流式请求需加 "stream_options": {"include_usage": true}。
 """
 import ctypes
 import json
@@ -24,6 +21,7 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 
 import cc_switch_sync
+import kun_sync
 import proxy_server
 import scheduler
 import storage
@@ -80,6 +78,7 @@ DEFAULT_CONFIG = {
     "api_key": "",
     "proxy_host": "127.0.0.1",
     "proxy_port": 8787,
+    "proxy_enabled": True,
     "upstream_base_url": "https://api.deepseek.com",
     "balance_refresh_seconds": 300,
     "unknown_model_fallback": "deepseek-v4-flash",
@@ -88,6 +87,11 @@ DEFAULT_CONFIG = {
         "db_path": "",
         "app_types": ["codex"],
         "sync_interval_seconds": 2,
+    },
+    "kun": {
+        "enabled": True,
+        "threads_dir": "",
+        "sync_interval_seconds": 3,
     },
     "models": {
         "deepseek-v4-flash": {
@@ -205,6 +209,10 @@ class App:
         threading.Thread(target=cc_switch_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
+        # Kun 数据同步线程：只读 Kun 本地可观测记录（observability/model-http）
+        threading.Thread(target=kun_sync.run,
+                         args=(self.config, self.settings, self.state, self.stop_event),
+                         daemon=True).start()
 
         # 主窗口与悬浮窗
         self.root = tk.Tk()
@@ -235,6 +243,33 @@ class App:
         except Exception as exc:
             messagebox.showerror("保存失败", f"写入 config.json 失败：\n{exc}")
             return False
+
+    def _toggle_proxy(self):
+        """设置页：开关本地代理，动态启停（无需重启程序）。"""
+        enabled = self.proxy_var.get()
+        self.config["proxy_enabled"] = enabled
+        self._save_config()
+        if enabled:
+            # 重新拉起代理线程；端口被占等失败会写入 state['proxy_error']
+            threading.Thread(target=proxy_server.start_proxy,
+                             args=(self.config, self.state), daemon=True).start()
+        else:
+            server = self.state.get("proxy_server")
+            if server:
+                # shutdown 必须从其他线程调用且会阻塞，故另起线程执行
+                threading.Thread(target=server.shutdown, daemon=True).start()
+            self.state["proxy_ready"] = False
+            self.state["proxy_error"] = None
+
+    def _toggle_cc(self):
+        """设置页：开关 CC Switch 同步（同步线程常驻，读到配置变化后自动生效）。"""
+        self.config.setdefault("cc_switch", {})["enabled"] = self.cc_var.get()
+        self._save_config()
+
+    def _toggle_kun(self):
+        """设置页：开关 Kun 同步（同步线程常驻，读到配置变化后自动生效）。"""
+        self.config.setdefault("kun", {})["enabled"] = self.kun_var.get()
+        self._save_config()
 
     def _init_style(self):
         style = ttk.Style(self.root)
@@ -611,12 +646,30 @@ class App:
         ttk.Button(key_box, text="保存 Key", command=self._save_api_key).pack(
             side="left", padx=(6, 0))
 
+        # 数据源开关（三个数据源全部保留，可分别开关，修改即时生效）
+        tk.Label(left, text="数据源开关:", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 4))
+        self.proxy_var = tk.BooleanVar(value=bool(self.config.get("proxy_enabled", True)))
+        ttk.Checkbutton(left, text="本地代理 (127.0.0.1:8787)", variable=self.proxy_var,
+                        command=self._toggle_proxy).pack(anchor="w", pady=(0, 4))
+        self.cc_var = tk.BooleanVar(
+            value=bool((self.config.get("cc_switch") or {}).get("enabled", True)))
+        ttk.Checkbutton(left, text="CC Switch 同步", variable=self.cc_var,
+                        command=self._toggle_cc).pack(anchor="w", pady=(0, 4))
+        self.kun_var = tk.BooleanVar(
+            value=bool((self.config.get("kun") or {}).get("enabled", True)))
+        ttk.Checkbutton(left, text="Kun 同步", variable=self.kun_var,
+                        command=self._toggle_kun).pack(anchor="w", pady=(0, 10))
+
         # 代理状态
         self.lbl_setting_proxy = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
         self.lbl_setting_proxy.pack(anchor="w", pady=(0, 6))
         # CC Switch 数据同步状态
         self.lbl_ccsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_ccsync.pack(anchor="w", pady=(0, 12))
+        self.lbl_ccsync.pack(anchor="w", pady=(0, 6))
+        # Kun 数据同步状态
+        self.lbl_kunsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
+        self.lbl_kunsync.pack(anchor="w", pady=(0, 12))
 
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
@@ -925,7 +978,9 @@ class App:
                 pass
 
         # 3) 代理状态
-        if self.state.get("proxy_error"):
+        if not self.config.get("proxy_enabled", True):
+            self.lbl_proxy_status.config(text="代理 已关闭（设置页可重新开启）", fg=C_SUB)
+        elif self.state.get("proxy_error"):
             self.lbl_proxy_status.config(text="代理 启动失败（端口被占用?）", fg=C_RED)
         elif self.state.get("proxy_ready"):
             port = self.config.get("proxy_port", 8787)
@@ -945,6 +1000,19 @@ class App:
                 self.lbl_ccsync.config(
                     text=f"CC Switch 同步：运行中 · 累计导入 {fmt_int(cc.get('total_added', 0))} 条"
                          f" · {cc.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.5) Kun 数据同步状态
+        if hasattr(self, "lbl_kunsync"):
+            kun = self.state.get("kun_sync")
+            if not kun or not kun.get("enabled"):
+                self.lbl_kunsync.config(text="Kun 同步：未启用", fg=C_SUB)
+            elif kun.get("error"):
+                self.lbl_kunsync.config(
+                    text="Kun 同步：读取失败 " + str(kun["error"]), fg=C_RED)
+            else:
+                self.lbl_kunsync.config(
+                    text=f"Kun 同步：运行中 · 累计导入 {fmt_int(kun.get('total_added', 0))} 条"
+                         f" · {kun.get('last_time', '')}", fg=C_GREEN)
 
         # 5) 日期与仪表盘图表
         self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))

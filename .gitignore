@@ -6,3 +6,6 @@ dist/
 build/
 __pycache__/
 *.pyc
+# 构建产物与本地说明
+*.exe
+README.txt

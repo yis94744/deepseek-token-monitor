@@ -196,11 +196,17 @@ def start_proxy(config: dict, state: dict):
     """后台线程入口：启动代理服务器；失败原因写入 state['proxy_error']。"""
     host = config.get("proxy_host", "127.0.0.1")
     port = int(config.get("proxy_port", 8787))
+    if not config.get("proxy_enabled", True):
+        state["proxy_ready"] = False  # 设置页已关闭代理，不监听端口
+        return
     try:
         server = ThreadingHTTPServer((host, port), _ProxyHandler)
     except OSError as exc:
         state["proxy_error"] = f"端口 {port} 被占用或无法监听: {exc}"
+        state["proxy_ready"] = False
         return
     server.config = config  # 注入配置供处理逻辑使用
+    state["proxy_server"] = server  # 保存引用，供设置页动态停止（server.shutdown）
     state["proxy_ready"] = True
     server.serve_forever()
+    state["proxy_ready"] = False  # 被 shutdown() 停止后标记为已关闭

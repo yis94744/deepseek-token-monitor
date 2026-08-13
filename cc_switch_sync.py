@@ -93,24 +93,26 @@ def run(config: dict, settings: dict, state: dict, stop_event):
     """后台线程入口：周期增量同步 CC Switch 用量。"""
     global _LOG
     cc = config.get("cc_switch") or {}
-    if not cc.get("enabled", True):
-        state["cc_sync"] = {"enabled": False}
-        return
     data_dir = os.path.dirname(storage._db_path or "")
     if data_dir:
         _LOG = os.path.join(data_dir, "cc_sync.log")
     interval = max(2, int(cc.get("sync_interval_seconds", 2)))
     cursor = int(settings.get("cc_switch_cursor") or 0)
-    state["cc_sync"] = {"enabled": True, "total_added": 0, "last_added": 0,
-                        "last_time": None, "error": None}
+    state["cc_sync"] = {"enabled": bool(cc.get("enabled", True)), "total_added": 0,
+                        "last_added": 0, "last_time": None, "error": None}
     _log(f"同步线程启动，起始游标={cursor}，间隔={interval}秒，db={_cc_db_path(config)}")
 
     while not stop_event.wait(interval):
+        if not (config.get("cc_switch") or {}).get("enabled", True):
+            state["cc_sync"]["enabled"] = False  # 设置页关闭后线程常驻等待，重新开启即恢复
+            state["cc_sync"]["error"] = None
+            continue
         try:
             new_cursor, added = sync_once(config, cursor)
             cursor = new_cursor
             settings["cc_switch_cursor"] = cursor  # 程序退出时随 settings.json 一起保存
             info = state["cc_sync"]
+            info["enabled"] = True  # 恢复同步时标记启用（设置页开关状态同步）
             if added:
                 info["total_added"] = info.get("total_added", 0) + added
                 info["last_added"] = added
