@@ -1,0 +1,30 @@
+{
+  "api_key": "",
+  "proxy_host": "127.0.0.1",
+  "proxy_port": 8787,
+  "upstream_base_url": "https://api.deepseek.com",
+  "balance_refresh_seconds": 300,
+  "unknown_model_fallback": "deepseek-v4-flash",
+  "cc_switch": {
+    "enabled": true,
+    "db_path": "",
+    "app_types": [
+      "codex"
+    ],
+    "sync_interval_seconds": 2
+  },
+  "models": {
+    "deepseek-v4-flash": {
+      "note": "输入(缓存命中)0.02 / 输入(缓存未命中)1.00 / 输出 2.00 元每百万tokens（官方平峰价）",
+      "cache_hit": 0.02,
+      "cache_miss": 1.0,
+      "output": 2.0
+    },
+    "deepseek-v4-pro": {
+      "note": "输入(缓存命中)0.025 / 输入(缓存未命中)3.00 / 输出 6.00 元每百万tokens（官方平峰价）",
+      "cache_hit": 0.025,
+      "cache_miss": 3.0,
+      "output": 6.0
+    }
+  }
+}
