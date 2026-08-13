@@ -7,8 +7,11 @@
 - 内置本地代理 http://127.0.0.1:8787，自动统计并计费 DeepSeek API 调用
 - 每天 00:00 自动日结、每周一自动周结、每月 1 日自动月结
 
-使用前提：把调用 DeepSeek 的 base_url 改成 http://127.0.0.1:8787；
-流式请求需加 "stream_options": {"include_usage": true}。
+默认统计方式：直接只读 CC Switch 本地数据库（~/.cc-switch/cc-switch.db），
+Codex 等经 CC Switch 的对话无需改地址即可自动统计；
+如需统计其他直连 DeepSeek API 的客户端，可把 base_url 改成
+http://127.0.0.1:8787 走本地代理，流式请求需加
+"stream_options": {"include_usage": true}。
 """
 import ctypes
 import json
