@@ -1,0 +1,8 @@
+# 敏感/本地文件，禁止上传
+config.json
+settings.json
+data/
+dist/
+build/
+__pycache__/
+*.pyc
