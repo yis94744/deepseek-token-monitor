@@ -21,6 +21,7 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 
 import cc_switch_sync
+import dsh_sync
 import kun_sync
 import proxy_server
 import scheduler
@@ -92,6 +93,11 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "threads_dir": "",
         "sync_interval_seconds": 3,
+    },
+    "dsh": {
+        "enabled": True,
+        "projcache_path": "",
+        "sync_interval_seconds": 5,
     },
     "models": {
         "deepseek-v4-flash": {
@@ -213,6 +219,10 @@ class App:
         threading.Thread(target=kun_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
+        # DeepSeek Harness 数据同步线程：只读 dsh 会话用量投影缓存
+        threading.Thread(target=dsh_sync.run,
+                         args=(self.config, self.settings, self.state, self.stop_event),
+                         daemon=True).start()
 
         # 主窗口与悬浮窗
         self.root = tk.Tk()
@@ -269,6 +279,11 @@ class App:
     def _toggle_kun(self):
         """设置页：开关 Kun 同步（同步线程常驻，读到配置变化后自动生效）。"""
         self.config.setdefault("kun", {})["enabled"] = self.kun_var.get()
+        self._save_config()
+
+    def _toggle_dsh(self):
+        """设置页：开关 DeepSeek Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
+        self.config.setdefault("dsh", {})["enabled"] = self.dsh_var.get()
         self._save_config()
 
     def _init_style(self):
@@ -659,7 +674,11 @@ class App:
         self.kun_var = tk.BooleanVar(
             value=bool((self.config.get("kun") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="Kun 同步", variable=self.kun_var,
-                        command=self._toggle_kun).pack(anchor="w", pady=(0, 10))
+                        command=self._toggle_kun).pack(anchor="w", pady=(0, 4))
+        self.dsh_var = tk.BooleanVar(
+            value=bool((self.config.get("dsh") or {}).get("enabled", True)))
+        ttk.Checkbutton(left, text="DeepSeek Harness 同步", variable=self.dsh_var,
+                        command=self._toggle_dsh).pack(anchor="w", pady=(0, 10))
 
         # 代理状态
         self.lbl_setting_proxy = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
@@ -669,7 +688,10 @@ class App:
         self.lbl_ccsync.pack(anchor="w", pady=(0, 6))
         # Kun 数据同步状态
         self.lbl_kunsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_kunsync.pack(anchor="w", pady=(0, 12))
+        self.lbl_kunsync.pack(anchor="w", pady=(0, 6))
+        # DeepSeek Harness 数据同步状态
+        self.lbl_dshsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
+        self.lbl_dshsync.pack(anchor="w", pady=(0, 12))
 
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
@@ -1013,6 +1035,19 @@ class App:
                 self.lbl_kunsync.config(
                     text=f"Kun 同步：运行中 · 累计导入 {fmt_int(kun.get('total_added', 0))} 条"
                          f" · {kun.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.6) DeepSeek Harness 数据同步状态
+        if hasattr(self, "lbl_dshsync"):
+            dsh = self.state.get("dsh_sync")
+            if not dsh or not dsh.get("enabled"):
+                self.lbl_dshsync.config(text="Harness 同步：未启用", fg=C_SUB)
+            elif dsh.get("error"):
+                self.lbl_dshsync.config(
+                    text="Harness 同步：读取失败 " + str(dsh["error"]), fg=C_RED)
+            else:
+                self.lbl_dshsync.config(
+                    text=f"Harness 同步：运行中 · 累计导入 {fmt_int(dsh.get('total_added', 0))} 条"
+                         f" · {dsh.get('last_time', '')}", fg=C_GREEN)
 
         # 5) 日期与仪表盘图表
         self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))
