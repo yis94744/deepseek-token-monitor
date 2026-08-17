@@ -12,7 +12,7 @@
 - **每日更新**：每天 00:00 自动结算当日用量，生成每日总结
 - **周/月总结**：自动生成最近 7 天周总结与整月总结
 - **动态提示**：每次 token 消耗增加时，悬浮窗弹出 `+N` 动画效果
-- **实时计费**：按 DeepSeek 官方现价实时计算费用
+- **实时计费**：按 DeepSeek 官网峰谷价计算费用（2026-08-17 起生效：每日 09:00-14:00 高峰时段价格翻倍；之前的调用按旧平峰价结算），单价可在配置中调整
 - **分类统计**：按模型分别统计，支持 `deepseek-v4-flash` / `deepseek-v4-pro`
 
 ## 下载安装
@@ -55,6 +55,9 @@
 - `cc_switch`：CC Switch 同步设置（默认开启，读取 `~/.cc-switch/cc-switch.db`）
 - `kun`：Kun 同步设置（默认开启，读取 `~/.kun/data/threads/`，可用 `threads_dir` 覆盖默认目录）
 - `dsh`：DeepSeek Harness 同步设置（默认开启，读取 `~/.dsh/storages/session_projcache.json`，可用 `projcache_path` 覆盖默认路径）
+  - `api_base`：Harness 本地地址（默认 `http://127.0.0.1:3080`），用于解析每个会话使用的模型（pro / flash），保证计费正确
+  - `model_refresh_seconds`：模型缓存刷新间隔（默认 300 秒）
+  - `models`：可选手动指定 `{会话ID: 模型名}`，优先级高于自动解析
 - 四个数据源（本地代理 / CC Switch / Kun / Harness）可在设置页「数据源开关」中分别开关，修改即时生效
 
 ## 源码运行 / 打包

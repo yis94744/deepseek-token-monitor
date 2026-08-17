@@ -165,7 +165,7 @@ def sync_once(config: dict, settings: dict) -> int:
         dt = _to_local(ev["ts"])
         if dt is None:
             continue
-        price = pricing.get_price(ev["model"], config)
+        price = pricing.get_price(ev["model"], config, dt)
         cost = pricing.calc_cost(
             {"prompt_cache_hit_tokens": hit,
              "prompt_cache_miss_tokens": miss,

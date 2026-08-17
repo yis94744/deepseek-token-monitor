@@ -140,7 +140,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if is_chat:
                 model, usage = self._extract(raw, is_stream)
                 if model and usage is not None:
-                    price = pricing.get_price(model, config)
+                    price = pricing.get_price(model, config, datetime.now())
                     cost = pricing.calc_cost(usage, price)
                     hit, miss, completion = pricing.calc_usage(usage)
                     storage.add_request(datetime.now(), model, hit, miss, completion, cost)

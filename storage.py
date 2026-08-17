@@ -332,6 +332,30 @@ def add_external_requests(rows: list) -> int:
             conn.close()
     return added
 
+def dsh_cumulative(sid: str):
+    """返回某 Harness 会话已入库的累计总量 (hit, miss, comp)（各增量行求和），无记录则 None。
+
+    供 dsh 同步做无状态差分：以库内全部记录求和为准，进程重启、settings
+    丢失都不会漏记或重复计费——重启后第一次同步会补上"上次入库以来的全部
+    增量"；去重键用累计总量本身，同一总量只入库一次。
+    """
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(prompt_cache_hit_tokens),0), "
+                "COALESCE(SUM(prompt_cache_miss_tokens),0), "
+                "COALESCE(SUM(completion_tokens),0) "
+                "FROM requests WHERE source_key LIKE ?",
+                ("dsh:" + sid + ":%",),
+            ).fetchone()
+        finally:
+            conn.close()
+    if row is None or (row[0] == 0 and row[1] == 0 and row[2] == 0):
+        return None
+    return (int(row[0]), int(row[1]), int(row[2]))
+
+
 def max_request_id() -> int:
     """返回明细表当前最大 id（用于悬浮窗检测新增记录）。"""
     with _lock:

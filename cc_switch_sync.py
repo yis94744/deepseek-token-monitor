@@ -73,15 +73,15 @@ def sync_once(config: dict, cursor: int) -> tuple:
         completion = int(output_tokens or 0)
         if hit + miss + completion <= 0:
             continue
-        price = pricing.get_price(model, config)
-        cost = pricing.calc_cost(
-            {"prompt_cache_hit_tokens": hit,
-             "prompt_cache_miss_tokens": miss,
-             "completion_tokens": completion}, price)
         try:
             dt = datetime.fromtimestamp(int(created_at))
         except Exception:
             continue
+        price = pricing.get_price(model, config, dt)
+        cost = pricing.calc_cost(
+            {"prompt_cache_hit_tokens": hit,
+             "prompt_cache_miss_tokens": miss,
+             "completion_tokens": completion}, price)
         key = "cc:" + (request_id or str(rowid))
         pending.append((key, dt, model, hit, miss, completion, cost))
 

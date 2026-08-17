@@ -5,6 +5,11 @@
   "upstream_base_url": "https://api.deepseek.com",
   "balance_refresh_seconds": 300,
   "unknown_model_fallback": "deepseek-v4-flash",
+  "peak_hours": {
+    "start_hour": 9,
+    "end_hour": 14
+  },
+  "legacy_until": "2026-08-17",
   "cc_switch": {
     "enabled": true,
     "db_path": "",
@@ -13,18 +18,48 @@
     ],
     "sync_interval_seconds": 2
   },
+  "dsh": {
+    "enabled": true,
+    "projcache_path": "",
+    "sync_interval_seconds": 5,
+    "api_base": "http://127.0.0.1:3080",
+    "model_refresh_seconds": 300,
+    "models": {
+      "session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx": "deepseek-v4-pro"
+    }
+  },
   "models": {
     "deepseek-v4-flash": {
-      "note": "输入(缓存命中)0.02 / 输入(缓存未命中)1.00 / 输出 2.00 元每百万tokens（官方平峰价）",
-      "cache_hit": 0.02,
-      "cache_miss": 1.0,
-      "output": 2.0
+      "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.05/未命中1.5/输出4.5；高峰 命中0.10/未命中3.0/输出9.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+      "cache_hit": 0.05,
+      "cache_miss": 1.5,
+      "output": 4.5,
+      "peak": {
+        "cache_hit": 0.10,
+        "cache_miss": 3.0,
+        "output": 9.0
+      },
+      "legacy": {
+        "cache_hit": 0.02,
+        "cache_miss": 1.0,
+        "output": 2.0
+      }
     },
     "deepseek-v4-pro": {
-      "note": "输入(缓存命中)0.025 / 输入(缓存未命中)3.00 / 输出 6.00 元每百万tokens（官方平峰价）",
-      "cache_hit": 0.025,
-      "cache_miss": 3.0,
-      "output": 6.0
+      "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.15/未命中4.5/输出13.5；高峰 命中0.30/未命中9.0/输出27.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+      "cache_hit": 0.15,
+      "cache_miss": 4.5,
+      "output": 13.5,
+      "peak": {
+        "cache_hit": 0.30,
+        "cache_miss": 9.0,
+        "output": 27.0
+      },
+      "legacy": {
+        "cache_hit": 0.025,
+        "cache_miss": 3.0,
+        "output": 6.0
+      }
     }
   }
 }
