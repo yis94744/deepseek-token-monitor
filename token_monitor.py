@@ -160,7 +160,7 @@ C_ORANGE = "#f1ac38"      # 主橙（高亮/按钮）
 C_GOLD = "#fed15e"        # 金黄（选中）
 C_ORANGE_DEEP = "#d77522" # 深橙
 C_GREEN = "#6fa36b"       # 余额绿
-C_GREEN_DEEP = "#1e9e3f"  # 悬停金额绿（圆球上方，醒目易读）
+C_GREEN_DEEP = "#2fbe4a"  # 悬停金额绿（360 悬浮球同款亮绿，醒目易读）
 C_RED = "#d9534f"         # 错误红
 C_TEXT = "#4a2f1d"        # 正文
 C_SUB = "#8a6a4d"         # 次要文字
@@ -901,9 +901,9 @@ class App:
         avatar = self._keep_image(_res("logo_round.png"), subsample=3)  # 256 -> 约85
         cv.create_image(w / 2, TEXT_H + IMG / 2, image=avatar)
         cv.create_oval(1, TEXT_H + 1, w - 1, h - 1, outline=C_ORANGE, width=2)
-        # 圆球上方透明区：悬停时显示当前消耗金额（绿色，自动缩字号不超出球宽）
+        # 圆球上方透明区：悬停时显示当前消耗金额（360 绿，字号稍大，自动缩字号不超出球宽）
         self.float_cost = cv.create_text(w / 2, 7, text="", fill=C_GREEN_DEEP,
-                                         font=(MONO, 8, "bold"))
+                                         font=(MONO, 10, "bold"))
 
         # 事件：悬停显示金额 / 单击开关面板 / 拖动 / 双击主界面 / 右键菜单
         cv.bind("<Enter>", self._float_on_enter)
@@ -1029,7 +1029,7 @@ class App:
         cv = self.float_cv
         max_w = self.float_size - 12  # 文字区宽 = 球宽，两侧留白防溢出
         f = tkfont.Font(font=cv.itemcget(self.float_cost, "font"))
-        while f.measure(text) > max_w and f.cget("size") > 6:
+        while f.measure(text) > max_w and f.cget("size") > 7:  # 最小 7pt，保证可读
             f.configure(size=f.cget("size") - 1)
             cv.itemconfigure(self.float_cost, font=f)
         while f.measure(text) > max_w and len(text) > 3:
