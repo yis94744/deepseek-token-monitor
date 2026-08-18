@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 
 
 # ================= 路径与资源 =================
@@ -933,9 +933,14 @@ class App:
             avatar = self._keep_image(_res("logo_round.png"), subsample=3)  # 256 -> 约85
             cv.create_image(w / 2, TEXT_H + IMG / 2, image=avatar)
             cv.create_oval(1, TEXT_H + 1, w - 1, h - 1, outline=C_ORANGE, width=2)
-        # 圆球上方透明区：悬停时显示当前消耗金额（亮绿，字号稍大，自动缩字号不超出球宽）
-        self.float_cost = cv.create_text(w / 2, 7, text="", fill=C_GREEN_DEEP,
-                                         font=(MONO, 10, "bold"))
+        # 圆球上方：悬停金额的深棕药丸底 + 亮绿文字。
+        # 文字必须画在不透明底色上——透明键色区会把绿字的抗锯齿边缘与洋红键色
+        # 混合，导致绿色观感发暗发灰（用户反馈"绿色不对"的根因）。
+        pill_h = 20
+        self.float_pill = rounded_rect(cv, 0, 0, w, pill_h, 10, fill=C_BROWN_DARK,
+                                       outline=C_ORANGE, width=1, state="hidden")
+        self.float_cost = cv.create_text(w / 2, pill_h / 2, text="", fill=C_GREEN_DEEP,
+                                         font=(MONO, 10, "bold"), state="hidden")
 
         # 事件：悬停显示金额 / 单击开关面板 / 拖动 / 双击主界面 / 右键菜单
         cv.bind("<Enter>", self._float_on_enter)
@@ -1088,24 +1093,27 @@ class App:
             pass
 
     def _float_on_enter(self, event):
-        """鼠标悬停：圆球底部显示当前消耗金额（今日费用）。"""
+        """鼠标悬停：圆球上方药丸内显示当前消耗金额（今日费用，亮绿）。"""
         try:
             s = storage.today_stats()
+            self.float_cv.itemconfigure(self.float_pill, state="normal")
+            self.float_cv.itemconfigure(self.float_cost, state="normal")
             self._set_ball_cost(fmt_money_short(s["cost"]))
         except Exception:
             pass
 
     def _float_on_leave(self, event):
-        """鼠标离开：隐藏金额文字。"""
+        """鼠标离开：隐藏金额文字与药丸底。"""
         try:
-            self.float_cv.itemconfigure(self.float_cost, text="")
+            self.float_cv.itemconfigure(self.float_pill, state="hidden")
+            self.float_cv.itemconfigure(self.float_cost, state="hidden")
         except Exception:
             pass
 
     def _set_ball_cost(self, text: str):
-        """设置圆球上方金额文字：字号自动缩小、必要时截断，保证不超出球宽。"""
+        """设置药丸内金额文字：字号自动缩小、必要时截断，保证不超出药丸。"""
         cv = self.float_cv
-        max_w = self.float_size - 12  # 文字区宽 = 球宽，两侧留白防溢出
+        max_w = self.float_size - 16  # 药丸内宽，两侧留白防溢出
         f = tkfont.Font(font=cv.itemcget(self.float_cost, "font"))
         while f.measure(text) > max_w and f.cget("size") > 7:  # 最小 7pt，保证可读
             f.configure(size=f.cget("size") - 1)
@@ -1211,8 +1219,8 @@ class App:
             self.card_cost_sub.config(text=f"共 {fmt_int(s['requests'])} 次调用")
             self.card_requests.config(text=fmt_int(s["requests"]))
             self.card_requests_sub.config(text="经本地代理统计")
-            # 圆球悬停中：刷新底部金额文字
-            if self.float_cv.itemcget(self.float_cost, "text"):
+            # 圆球悬停中（药丸可见）：刷新金额文字
+            if self.float_cv.itemcget(self.float_cost, "state") == "normal":
                 self._set_ball_cost(fmt_money_short(s["cost"]))
             # 面板打开中：刷新使用额度
             if self._float_panel_open:
