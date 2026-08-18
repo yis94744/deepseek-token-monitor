@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 
 
 # ================= 路径与资源 =================
@@ -205,14 +205,37 @@ def fmt_money_short(value) -> str:
         return "¥--"
 
 
+def rounded_rect_points(x1, y1, x2, y2, r, steps=10):
+    """圆角矩形闭合轮廓点：四角圆弧逐点采样，返回 [(x,y), ...]。
+
+    相比 smooth=True 多边形：轮廓完全闭合、无接缝缺口，边角准确。
+    """
+    import math
+    r = max(1, min(r, (x2 - x1) / 2.0, (y2 - y1) / 2.0))
+    pts = []
+
+    def arc(cx, cy, a0, a1):
+        for i in range(steps + 1):
+            a = math.radians(a0 + (a1 - a0) * i / steps)
+            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+
+    pts.append((x1 + r, y1))
+    pts.append((x2 - r, y1))
+    arc(x2 - r, y1 + r, -90, 0)     # 右上角
+    pts.append((x2, y2 - r))
+    arc(x2 - r, y2 - r, 0, 90)      # 右下角
+    pts.append((x1 + r, y2))
+    arc(x1 + r, y2 - r, 90, 180)    # 左下角
+    pts.append((x1, y1 + r))
+    arc(x1 + r, y1 + r, 180, 270)   # 左上角
+    return pts
+
+
 def rounded_rect(canvas, x1, y1, x2, y2, r, **kwargs):
-    """在 Canvas 上绘制圆角矩形（用平滑多边形近似）。"""
-    points = [
-        x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r,
-        x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
-        x1, y2, x1, y2 - r, x1, y1 + r, x1, y1,
-    ]
-    return canvas.create_polygon(points, smooth=True, **kwargs)
+    """在 Canvas 上绘制圆角矩形（轮廓点采样，完全闭合、无平滑缺口）。"""
+    pts = rounded_rect_points(x1, y1, x2, y2, r)
+    flat = [c for pt in pts for c in pt]
+    return canvas.create_polygon(flat, smooth=False, **kwargs)
 
 
 class App:
@@ -903,8 +926,8 @@ class App:
             messagebox.showinfo("已保存", f"余额刷新间隔已改为 {value} 秒，立即生效。")
     # ================= 悬浮窗（360 风格圆形噜噜球） =================
     def _build_float_window(self):
-        IMG = 85     # 噜噜头像尺寸（logo_round 256 -> subsample 3），圆圈与图片完全等大
-        TEXT_H = 26  # 圆球上方的悬停金额文字区（透明，仅绿色文字可见）
+        IMG = 96     # 噜噜头像尺寸（Pillow 精确缩放），圆圈与图片完全等大
+        TEXT_H = 26  # 圆球上方的悬停金额文字区（透明，仅药丸与文字可见）
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
@@ -937,8 +960,10 @@ class App:
         # 文字必须画在不透明底色上——透明键色区会把绿字的抗锯齿边缘与洋红键色
         # 混合，导致绿色观感发暗发灰（用户反馈"绿色不对"的根因）。
         pill_h = 20
-        self.float_pill = rounded_rect(cv, 0, 0, w, pill_h, 10, fill=C_BROWN_DARK,
-                                       outline=C_ORANGE, width=1, state="hidden")
+        pill_pts = rounded_rect_points(0, 0, w, pill_h, 10)
+        self.float_pill = cv.create_polygon(
+            [c for pt in pill_pts for c in pt], smooth=False,
+            fill=C_BROWN_DARK, outline=C_ORANGE, width=1, state="hidden")
         self.float_cost = cv.create_text(w / 2, pill_h / 2, text="", fill=C_GREEN_DEEP,
                                          font=(MONO, 10, "bold"), state="hidden")
 
@@ -966,15 +991,16 @@ class App:
     def _make_ball_image(self, size: int):
         """用 Pillow 预渲染抗锯齿圆球图片（返回 tk.PhotoImage，失败返回 None）。
 
-        4x 超采样 + LANCZOS 缩小实现抗锯齿：奶油底圆形裁剪噜噜头像（圆形遮罩），
-        边缘橙色细圈；圆外区域统一为透明键色 C_KEY，消除裁剪白点与锯齿。
+        8x 超采样 + LANCZOS 缩小实现抗锯齿：奶油底圆形裁剪噜噜头像（圆形遮罩），
+        边缘橙色细圈；圆外区域统一为透明键色 C_KEY，消除裁剪白点与锯齿，
+        圆边更圆润（更高分辨率 + 更细的阈值量化）。
         """
         try:
             from PIL import Image, ImageDraw
         except Exception:
             return None
         try:
-            SS = 4                     # 超采样倍数（抗锯齿）
+            SS = 8                     # 超采样倍数（越高圆边越圆润）
             W = size * SS
             resample = getattr(Image, "Resampling", Image).LANCZOS
             # 透明画布 -> 奶油底圆（内接圆，四角留透明）
