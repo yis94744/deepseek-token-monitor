@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.6.0"
 
 
 # ================= 路径与资源 =================
@@ -288,6 +288,7 @@ class App:
         self._images = []           # 保存图片引用，防止被垃圾回收
         self._page_refreshers = {}  # 页签索引 -> 刷新函数
         self._update_checked = False
+        self._tray_icon = None
         self._build_main_window()
         self._build_float_window()
 
@@ -379,22 +380,97 @@ class App:
         self._images.append(img)
         return img
 
-    def _win_minimize(self):
-        """最小化到任务栏（程序继续后台运行，任务栏图标可随时恢复）。"""
+    def _minimize_to_tray(self):
+        """最小化到系统托盘：隐藏主窗口，托盘图标常驻（可恢复/退出）。
+
+        托盘不可用时（pystray 缺失/启动失败）退回最小化到任务栏。
+        """
         try:
-            self.root.iconify()
+            self.root.withdraw()
+        except Exception:
+            pass
+        if self._tray_icon is not None:
+            return
+        try:
+            import pystray
+            from PIL import Image
+            img = Image.open(_res("icon.ico"))
+            menu = pystray.Menu(
+                pystray.MenuItem("显示主界面",
+                                 lambda: self.root.after(0, self._restore_from_tray)),
+                pystray.MenuItem("退出程序",
+                                 lambda: self.root.after(0, self.quit)),
+            )
+            icon = pystray.Icon("DeepSeekTokenMonitor", img,
+                                "水豚噜噜 · DeepSeek 用量监控", menu)
+            self._tray_icon = icon
+            threading.Thread(target=icon.run, daemon=True).start()
+        except Exception:
+            self._tray_icon = None
+            # 托盘不可用：退回最小化到任务栏
+            try:
+                self.root.deiconify()
+                self.root.iconify()
+            except Exception:
+                pass
+
+    def _restore_from_tray(self):
+        """从托盘恢复主窗口（同时退出托盘图标）。"""
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
+            self._tray_icon = None
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after(300, lambda: self.root.attributes("-topmost", False))
         except Exception:
             pass
 
-    def _win_maximize_toggle(self):
-        """最大化 / 还原切换。"""
+    def _ask_close_mode(self):
+        """弹窗询问关闭方式：直接关闭 / 最小化到托盘（可记住选择）。"""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("退出方式")
+        dlg.configure(bg=C_BG)
+        dlg.resizable(False, False)
+        dlg.attributes("-topmost", True)
         try:
-            if self.root.state() == "zoomed":
-                self.root.state("normal")
-            else:
-                self.root.state("zoomed")
+            dlg.attributes("-toolwindow", True)
         except Exception:
             pass
+        tk.Label(dlg, text="关闭后：", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=18, pady=(14, 4))
+        tk.Label(dlg, text="① 直接关闭程序（停止统计与代理）\n② 最小化到系统托盘（后台继续监控）",
+                 bg=C_BG, fg=C_TEXT, font=(FONT, 9), justify="left").pack(
+            anchor="w", padx=18, pady=(0, 10))
+        btns = tk.Frame(dlg, bg=C_BG)
+        btns.pack(padx=18, pady=(0, 8))
+        choice = {"mode": None}
+
+        def choose(mode):
+            if remember_var.get():
+                self.settings["close_behavior"] = mode
+                save_settings(self.settings)
+            choice["mode"] = mode
+            dlg.destroy()
+
+        ttk.Button(btns, text="直接关闭", command=lambda: choose("close"),
+                   width=12).pack(side="left", padx=(0, 8))
+        ttk.Button(btns, text="最小化到托盘", command=lambda: choose("tray"),
+                   width=12).pack(side="left")
+        remember_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(dlg, text="记住选择，下次不再询问",
+                        variable=remember_var).pack(anchor="w", padx=18, pady=(0, 12))
+        dlg.grab_set()
+        try:
+            self.root.wait_window(dlg)
+        except Exception:
+            return None
+        return choice["mode"]
+
     # ================= 主窗口 =================
     def _build_main_window(self):
         root = self.root
@@ -428,23 +504,7 @@ class App:
                                           font=(FONT, 9, "bold"), cursor="hand2")
         self.lbl_update_banner.pack(side="right", padx=8)
         self.lbl_update_banner.bind("<Button-1>", lambda e: self._open_update_page())
-
-        # 右上角：自定义 最小化 / 最大化(还原) / 关闭 按钮（与应用主题一致）
-        btn_bar = tk.Frame(header, bg=C_BROWN)
-        btn_bar.pack(side="right", padx=(0, 6))
-
-        def _mk_btn(text, command):
-            lb = tk.Label(btn_bar, text=text, bg=C_BROWN, fg="#f6d9ae",
-                          font=(FONT, 11, "bold"), padx=10, pady=2, cursor="hand2")
-            lb.pack(side="left")
-            lb.bind("<Button-1>", lambda e: command())
-            lb.bind("<Enter>", lambda e: lb.config(bg=C_BROWN_MID))
-            lb.bind("<Leave>", lambda e: lb.config(bg=C_BROWN))
-            return lb
-
-        _mk_btn("—", self._win_minimize)
-        _mk_btn("□", self._win_maximize_toggle)
-        _mk_btn("✕", self._on_close)
+        # 最小化/最大化/关闭按钮统一使用窗口右上角原生标题栏的一套（不再重复添加）
 
         # ---- 顶部指标卡 ----
         cards = tk.Frame(root, bg=C_BG)
@@ -1468,10 +1528,22 @@ class App:
             webbrowser.open(url)
 
     def _on_close(self):
-        if messagebox.askokcancel("退出", "确定要退出水豚噜噜监控吗？\n退出后本地代理与统计都会停止。"):
+        """点关闭（×）：弹窗选择 直接关闭 或 最小化到托盘（可记住选择）。"""
+        mode = self.settings.get("close_behavior")
+        if mode not in ("close", "tray"):
+            mode = self._ask_close_mode()
+        if mode == "close":
             self.quit()
+        elif mode == "tray":
+            self._minimize_to_tray()
 
     def quit(self):
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
+            self._tray_icon = None
         self._float_save_pos()
         self.stop_event.set()
         self.root.destroy()
