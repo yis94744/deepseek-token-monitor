@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.5.1"
 
 
 # ================= 路径与资源 =================
@@ -170,7 +170,8 @@ C_ORANGE = "#f1ac38"      # 主橙（高亮/按钮）
 C_GOLD = "#fed15e"        # 金黄（选中）
 C_ORANGE_DEEP = "#d77522" # 深橙
 C_GREEN = "#6fa36b"       # 余额绿
-C_GREEN_DEEP = "#2fbe4a"  # 悬停金额绿（360 悬浮球同款亮绿，醒目易读）
+C_GREEN_DEEP = "#00e04d"  # 悬停金额亮绿（纯正高饱和绿色，观感清晰）
+C_PINK = "#ff69b4"        # +N 飘字纯粉
 C_RED = "#d9534f"         # 错误红
 C_TEXT = "#4a2f1d"        # 正文
 C_SUB = "#8a6a4d"         # 次要文字
@@ -922,13 +923,17 @@ class App:
         cv.pack()
         self.float_cv = cv
 
-        # 圆球 = 噜噜圆形头像本身：奶白底与图片等大（防透明角落穿帮），
-        # 头像铺满整个圆，边缘一条橙色细圈（不改变圆圈尺寸）
-        cv.create_oval(0, TEXT_H, IMG, h, fill=C_CARD, outline="")
-        avatar = self._keep_image(_res("logo_round.png"), subsample=3)  # 256 -> 约85
-        cv.create_image(w / 2, TEXT_H + IMG / 2, image=avatar)
-        cv.create_oval(1, TEXT_H + 1, w - 1, h - 1, outline=C_ORANGE, width=2)
-        # 圆球上方透明区：悬停时显示当前消耗金额（360 绿，字号稍大，自动缩字号不超出球宽）
+        # 圆球 = 噜噜圆形头像本身：Pillow 预渲染抗锯齿合成（奶油底 + 圆形裁剪头像 + 橙圈），
+        # 消除裁剪边缘的白点/锯齿；Pillow 不可用时退回 Canvas 绘制
+        ball = self._make_ball_image(IMG)
+        if ball is not None:
+            cv.create_image(w / 2, TEXT_H + IMG / 2, image=ball)
+        else:
+            cv.create_oval(0, TEXT_H, IMG, h, fill=C_CARD, outline="")
+            avatar = self._keep_image(_res("logo_round.png"), subsample=3)  # 256 -> 约85
+            cv.create_image(w / 2, TEXT_H + IMG / 2, image=avatar)
+            cv.create_oval(1, TEXT_H + 1, w - 1, h - 1, outline=C_ORANGE, width=2)
+        # 圆球上方透明区：悬停时显示当前消耗金额（亮绿，字号稍大，自动缩字号不超出球宽）
         self.float_cost = cv.create_text(w / 2, 7, text="", fill=C_GREEN_DEEP,
                                          font=(MONO, 10, "bold"))
 
@@ -952,6 +957,52 @@ class App:
         win.geometry(f"+{x}+{y}")
         if not self.settings.get("float_window", True):
             win.withdraw()
+
+    def _make_ball_image(self, size: int):
+        """用 Pillow 预渲染抗锯齿圆球图片（返回 tk.PhotoImage，失败返回 None）。
+
+        4x 超采样 + LANCZOS 缩小实现抗锯齿：奶油底圆形裁剪噜噜头像（圆形遮罩），
+        边缘橙色细圈；圆外区域统一为透明键色 C_KEY，消除裁剪白点与锯齿。
+        """
+        try:
+            from PIL import Image, ImageDraw
+        except Exception:
+            return None
+        try:
+            SS = 4                     # 超采样倍数（抗锯齿）
+            W = size * SS
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            # 透明画布 -> 奶油底圆（内接圆，四角留透明）
+            img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            d.ellipse([0, 0, W - 1, W - 1], fill=(252, 253, 248, 255))  # C_CARD
+            # 噜噜头像：放大 + 圆形遮罩（遮罩略小于圆，边缘落在奶油底上，避免白边）
+            avatar = Image.open(_res("logo_round.png")).convert("RGBA")
+            avatar = avatar.resize((W, W), resample)
+            mask = Image.new("L", (W, W), 0)
+            ImageDraw.Draw(mask).ellipse([3, 3, W - 4, W - 4], fill=255)
+            img = Image.alpha_composite(
+                img, Image.composite(avatar, Image.new("RGBA", (W, W), (0, 0, 0, 0)), mask))
+            # 橙色细圈（画在奶油底上，超采样天然抗锯齿）
+            d = ImageDraw.Draw(img)
+            d.ellipse([2, 2, W - 3, W - 3], outline=(241, 172, 56, 255), width=SS * 2)
+            small = img.resize((size, size), resample)
+            # 展平：半透明像素按阈值取舍，圆外像素统一为透明键色（消除粉色/白色杂边）
+            out = Image.new("RGB", (size, size), C_KEY)
+            px_out = out.load()
+            px_in = small.load()
+            for y in range(size):
+                for x in range(size):
+                    r, g, b, a = px_in[x, y]
+                    px_out[x, y] = (r, g, b) if a >= 110 else (0xFF, 0x00, 0xFE)
+            import io
+            buf = io.BytesIO()
+            out.save(buf, format="PNG")
+            photo = tk.PhotoImage(data=buf.getvalue())
+            self._images.append(photo)
+            return photo
+        except Exception:
+            return None
 
     def _build_float_panel(self):
         """点击圆球弹出的「使用额度」面板：圆角卡片，展示今日/本月用量与余额。"""
@@ -1099,13 +1150,15 @@ class App:
         # 连续多个弹窗略微右移错位，避免完全重叠
         self._popups = (self._popups + 1) % 3
         x = 22 + self._popups * 8
-        item = cv.create_text(x, 30, anchor="w", text=text, fill=C_ORANGE_DEEP,
+        item = cv.create_text(x, 30, anchor="w", text=text, fill=C_PINK,
                               font=(MONO, 10, "bold"))
-        # 渐隐色阶：从深橙过渡到悬浮窗的奶白底色，模拟淡出（12 帧约 0.6 秒）
-        colors = ["#d77522", "#df8630", "#e6963f", "#eda64e", "#f0b368",
-                  "#f3c081", "#f5cd99", "#f7d9b0", "#f9e4c6", "#fbeedb",
-                  "#fdf6ec", "#fff8ec"]
-        steps = len(colors)
+        # 渐隐色阶：纯粉 -> 悬浮窗奶白底色，模拟淡出（12 帧约 0.6 秒）
+        steps = 12
+        p0 = (0xFF, 0x69, 0xB4)  # 纯粉
+        p1 = (0xFF, 0xF8, 0xEC)  # 奶白
+        colors = ["#%02x%02x%02x" % tuple(
+            int(p0[i] + (p1[i] - p0[i]) * (s / (steps - 1))) for i in range(3))
+            for s in range(steps)]
 
         def animate(step):
             try:

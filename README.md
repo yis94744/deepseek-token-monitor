@@ -81,7 +81,7 @@
 
 ```
 python token_monitor.py          # 运行主程序
-pip install pyinstaller          # 打包 exe
+pip install pyinstaller pillow   # 打包 exe（pillow 用于悬浮球抗锯齿渲染）
 pyinstaller DeepSeekTokenMonitor.spec
 ```
 
