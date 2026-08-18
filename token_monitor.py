@@ -3,7 +3,7 @@
 
 一个完整的水豚主题桌面软件：
 - 主窗口：仪表盘（今日/本周/本月、7 天费用柱状图、各模型统计、历史快照、设置）
-- 悬浮窗：水豚皮肤小窗，可拖动、可右键操作，可在设置里开关
+- 悬浮窗：360 风格圆形噜噜球，可拖动、悬停显示消耗金额、单击弹出使用额度面板、右键操作，可在设置里开关
 - 内置本地代理 http://127.0.0.1:8787，自动统计并计费 DeepSeek API 调用
 - 每天 00:00 自动日结、每周一自动周结、每月 1 日自动月结
 
@@ -17,6 +17,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime
 from tkinter import messagebox, ttk
 
@@ -162,6 +163,7 @@ C_GREEN = "#6fa36b"       # 余额绿
 C_RED = "#d9534f"         # 错误红
 C_TEXT = "#4a2f1d"        # 正文
 C_SUB = "#8a6a4d"         # 次要文字
+C_KEY = "#ff00fe"         # 透明色键（圆形悬浮窗/面板的四角变透明）
 FONT = "Microsoft YaHei UI"
 MONO = "Consolas"
 
@@ -178,6 +180,17 @@ def fmt_money(value) -> str:
         return f"¥{float(value):,.4f}"
     except Exception:
         return "¥0.0000"
+
+
+def fmt_money_short(value) -> str:
+    """圆球上用的小金额格式：两位小数，过万显示 x.x万，保证不撑破小球。"""
+    try:
+        v = float(value)
+        if v >= 10000:
+            return "¥%.1f万" % (v / 10000)
+        return "¥%.2f" % v
+    except Exception:
+        return "¥--"
 
 
 def rounded_rect(canvas, x1, y1, x2, y2, r, **kwargs):
@@ -850,61 +863,170 @@ class App:
         save_settings(self.settings)
         if self._save_config():
             messagebox.showinfo("已保存", f"余额刷新间隔已改为 {value} 秒，立即生效。")
-    # ================= 悬浮窗（水豚皮肤） =================
+    # ================= 悬浮窗（360 风格圆形噜噜球） =================
     def _build_float_window(self):
+        S = 140  # 圆球窗口尺寸：正方形窗口 + 透明四角 = 视觉圆形
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
+        try:
+            win.attributes("-transparentcolor", C_KEY)  # 圆形窗口：键色区域变透明
+        except Exception:
+            pass
         self.float_win = win
+        self.float_size = S
         self._float_drag_off = (0, 0)
+        self._float_drag_start = (0, 0)
+        self._float_panel_open = False
 
-        w, h = 252, 158
-        cv = tk.Canvas(win, width=w, height=h, highlightthickness=0, bg=C_BG)
+        cv = tk.Canvas(win, width=S, height=S, highlightthickness=0, bg=C_KEY)
         cv.pack()
         self.float_cv = cv
 
-        rounded_rect(cv, 2, 2, w - 2, h - 2, 18, fill="#fff8ec", outline=C_ORANGE, width=2)
+        # 球体：外橙圈 + 奶白底
+        cv.create_oval(2, 2, S - 2, S - 2, fill=C_CARD, outline=C_ORANGE, width=3)
+        # 噜噜圆形头像（logo_round 256 -> 64px，居中偏上，留出底部文字区）
+        avatar = self._keep_image(_res("logo_round.png"), subsample=4)
+        cv.create_image(S / 2, 52, image=avatar)
+        # 底部圆弧区：悬停时显示当前消耗金额（自动缩字号，不超出小球）
+        self.float_cost = cv.create_text(S / 2, 114, text="", fill=C_BROWN_DARK,
+                                         font=(MONO, 8, "bold"))
 
-        # 圆形头像 + 标题
-        logo = self._keep_image(_res("logo_round.png"), subsample=6)  # 256 -> 约42
-        cv.create_image(30, 32, image=logo)
-        cv.create_text(62, 18, anchor="w", text="噜噜监控", fill=C_BROWN_DARK,
-                       font=(FONT, 10, "bold"))
-        cv.create_text(62, 38, anchor="w", text="DeepSeek Token", fill=C_SUB, font=(FONT, 8))
-        # 关闭小按钮（仅隐藏悬浮窗）
-        cv.create_text(w - 14, 18, text="✕", fill=C_SUB, font=(FONT, 10, "bold"), tags="close")
-
-        self.float_tokens = cv.create_text(16, 74, anchor="w", text="今日 Token  --",
-                                           fill=C_BROWN_DARK, font=(MONO, 11, "bold"))
-        self.float_cost = cv.create_text(16, 100, anchor="w", text="今日费用  --",
-                                         fill=C_ORANGE_DEEP, font=(MONO, 11, "bold"))
-        self.float_balance = cv.create_text(16, 126, anchor="w", text="余额  --",
-                                            fill=C_GREEN, font=(MONO, 9))
-
-        # 右下角水豚装饰表情
-        deco = self._keep_image(_res("deco2.gif"), subsample=9)
-        cv.create_image(w - 30, h - 28, image=deco)
-
-        # 事件：拖动 / 双击打开主窗口 / 右键菜单
-        cv.tag_bind("close", "<Button-1>", lambda e: self._hide_float())
+        # 事件：悬停显示金额 / 单击开关面板 / 拖动 / 双击主界面 / 右键菜单
+        cv.bind("<Enter>", self._float_on_enter)
+        cv.bind("<Leave>", self._float_on_leave)
         cv.bind("<Button-1>", self._float_start_drag)
         cv.bind("<B1-Motion>", self._float_on_drag)
         cv.bind("<ButtonRelease-1>", self._float_save_pos)
         cv.bind("<Double-Button-1>", lambda e: self._show_main())
         cv.bind("<Button-3>", self._float_menu)
 
+        # 点击面板：显示使用额度
+        self._build_float_panel()
+
         # 初始位置：优先上次保存的位置，否则屏幕右上角
         x = self.settings.get("float_x")
         y = self.settings.get("float_y")
         if x is None or y is None:
-            x, y = win.winfo_screenwidth() - w - 30, 90
+            x, y = win.winfo_screenwidth() - S - 30, 90
         win.geometry(f"+{x}+{y}")
         if not self.settings.get("float_window", True):
             win.withdraw()
 
+    def _build_float_panel(self):
+        """点击圆球弹出的「使用额度」面板：圆角卡片，展示今日/本月用量与余额。"""
+        w, h = 236, 176
+        panel = tk.Toplevel(self.root)
+        panel.overrideredirect(True)
+        panel.attributes("-topmost", True)
+        try:
+            panel.attributes("-transparentcolor", C_KEY)
+        except Exception:
+            pass
+        self.float_panel = panel
+        cv = tk.Canvas(panel, width=w, height=h, highlightthickness=0, bg=C_KEY)
+        cv.pack()
+        self.float_panel_cv = cv
+        self.float_panel_size = (w, h)
+
+        rounded_rect(cv, 2, 2, w - 2, h - 2, 14, fill="#fff8ec", outline=C_ORANGE, width=2)
+        cv.create_text(16, 18, anchor="w", text="噜噜 · 使用额度", fill=C_BROWN_DARK,
+                       font=(FONT, 10, "bold"))
+        cv.create_text(w - 14, 18, text="✕", fill=C_SUB, font=(FONT, 10, "bold"), tags="close")
+        cv.tag_bind("close", "<Button-1>",
+                    lambda e: self._float_toggle_panel(force_close=True))
+
+        rows = [
+            ("今日 Token", "float_p_tokens", C_BROWN_DARK),
+            ("今日费用", "float_p_cost", C_ORANGE_DEEP),
+            ("本月费用", "float_p_month", C_ORANGE_DEEP),
+            ("余额 / 额度", "float_p_balance", C_GREEN),
+        ]
+        y = 48
+        for label, attr, color in rows:
+            cv.create_text(18, y, anchor="w", text=label, fill=C_SUB, font=(FONT, 9))
+            item = cv.create_text(w - 18, y, anchor="e", text="--", fill=color,
+                                  font=(MONO, 9, "bold"))
+            setattr(self, attr, item)
+            y += 31
+        panel.withdraw()
+
+    def _float_place_panel(self):
+        """把面板放到圆球右侧（贴边防溢出屏幕）并显示。"""
+        panel = self.float_panel
+        w, h = self.float_panel_size
+        bx, by = self.float_win.winfo_x(), self.float_win.winfo_y()
+        sw, sh = panel.winfo_screenwidth(), panel.winfo_screenheight()
+        x = bx + self.float_size + 6
+        if x + w > sw:
+            x = bx - w - 6
+        y = min(max(by - 24, 0), sh - h - 40)
+        panel.geometry(f"+{int(x)}+{int(y)}")
+        panel.deiconify()
+        panel.lift()
+        self._float_panel_open = True
+        self._refresh_float_panel()
+
+    def _float_toggle_panel(self, force_close=False):
+        if force_close or self._float_panel_open:
+            self.float_panel.withdraw()
+            self._float_panel_open = False
+            return
+        self._float_place_panel()
+
+    def _refresh_float_panel(self):
+        """刷新面板内容（今日/本月/余额），面板隐藏时不做事。"""
+        try:
+            if not self._float_panel_open:
+                return
+            cv = self.float_panel_cv
+            s = storage.today_stats()
+            total = s["cache_hit"] + s["cache_miss"] + s["completion"]
+            cv.itemconfigure(self.float_p_tokens, text=fmt_int(total))
+            cv.itemconfigure(self.float_p_cost, text=fmt_money(s["cost"]))
+            cv.itemconfigure(self.float_p_month,
+                             text=fmt_money(storage.this_month_stats()["cost"]))
+            if self.state.get("balance") is not None:
+                cv.itemconfigure(self.float_p_balance,
+                                 text=fmt_money(self.state["balance"]), fill=C_GREEN)
+            elif self.state.get("balance_error"):
+                cv.itemconfigure(self.float_p_balance, text="获取失败", fill=C_RED)
+            else:
+                cv.itemconfigure(self.float_p_balance, text="加载中...", fill=C_SUB)
+        except Exception:
+            pass
+
+    def _float_on_enter(self, event):
+        """鼠标悬停：圆球底部显示当前消耗金额（今日费用）。"""
+        try:
+            s = storage.today_stats()
+            self._set_ball_cost(fmt_money_short(s["cost"]))
+        except Exception:
+            pass
+
+    def _float_on_leave(self, event):
+        """鼠标离开：隐藏金额文字。"""
+        try:
+            self.float_cv.itemconfigure(self.float_cost, text="")
+        except Exception:
+            pass
+
+    def _set_ball_cost(self, text: str):
+        """设置圆球底部金额文字：字号自动缩小、必要时截断，保证不超出小球。"""
+        cv = self.float_cv
+        max_w = self.float_size - 36  # 底部圆弧内的弦宽（留白防溢出）
+        f = tkfont.Font(font=cv.itemcget(self.float_cost, "font"))
+        while f.measure(text) > max_w and f.cget("size") > 6:
+            f.configure(size=f.cget("size") - 1)
+            cv.itemconfigure(self.float_cost, font=f)
+        while f.measure(text) > max_w and len(text) > 3:
+            text = text[:-1]
+        cv.itemconfigure(self.float_cost, text=text)
+
     def _float_start_drag(self, event):
         self._float_drag_off = (event.x_root - self.float_win.winfo_x(),
                                 event.y_root - self.float_win.winfo_y())
+        self._float_drag_start = (event.x_root, event.y_root)
 
     def _float_on_drag(self, event):
         self.float_win.geometry(
@@ -912,12 +1034,21 @@ class App:
             f"+{event.y_root - self._float_drag_off[1]}")
 
     def _float_save_pos(self, event=None):
+        # 按下后几乎没移动 => 视为单击：开关使用额度面板
+        if event is not None and self._float_drag_start:
+            dx = abs(event.x_root - self._float_drag_start[0])
+            dy = abs(event.y_root - self._float_drag_start[1])
+            if dx + dy < 6:
+                self._float_toggle_panel()
         self.settings["float_x"] = self.float_win.winfo_x()
         self.settings["float_y"] = self.float_win.winfo_y()
         save_settings(self.settings)
+        # 圆球移动后，把已打开的面板挪回旁边
+        if self._float_panel_open:
+            self._float_place_panel()
 
     def _float_popup(self, total: int):
-        """在悬浮窗 token 旁弹出一个 +N，并上浮淡出。"""
+        """在圆球上方弹出一个 +N，并上浮淡出。"""
         cv = self.float_cv
         try:
             if not self.float_win.winfo_viewable():
@@ -927,9 +1058,9 @@ class App:
         text = "+" + fmt_int(total)
         # 连续多个弹窗略微右移错位，避免完全重叠
         self._popups = (self._popups + 1) % 3
-        x = 146 + self._popups * 14
-        item = cv.create_text(x, 66, anchor="w", text=text, fill=C_ORANGE_DEEP,
-                              font=(MONO, 11, "bold"))
+        x = 58 + self._popups * 10
+        item = cv.create_text(x, 26, anchor="w", text=text, fill=C_ORANGE_DEEP,
+                              font=(MONO, 10, "bold"))
         # 渐隐色阶：从深橙过渡到悬浮窗的奶白底色，模拟淡出（12 帧约 0.6 秒）
         colors = ["#d77522", "#df8630", "#e6963f", "#eda64e", "#f0b368",
                   "#f3c081", "#f5cd99", "#f7d9b0", "#f9e4c6", "#fbeedb",
@@ -987,8 +1118,12 @@ class App:
             self.card_cost_sub.config(text=f"共 {fmt_int(s['requests'])} 次调用")
             self.card_requests.config(text=fmt_int(s["requests"]))
             self.card_requests_sub.config(text="经本地代理统计")
-            self.float_cv.itemconfigure(self.float_tokens, text=f"今日 Token  {fmt_int(total)}")
-            self.float_cv.itemconfigure(self.float_cost, text=f"今日费用  {fmt_money(s['cost'])}")
+            # 圆球悬停中：刷新底部金额文字
+            if self.float_cv.itemcget(self.float_cost, "text"):
+                self._set_ball_cost(fmt_money_short(s["cost"]))
+            # 面板打开中：刷新使用额度
+            if self._float_panel_open:
+                self._refresh_float_panel()
             # token 有新增时，在悬浮窗弹出 "+N" 上浮淡出动画
             new_rows = storage.new_requests_since(self._last_request_id, seconds=8)
             if new_rows:
@@ -1004,15 +1139,15 @@ class App:
             text = fmt_money(self.state["balance"])
             self.card_balance.config(text=text, fg=C_GREEN)
             self.card_balance_sub.config(text="官方余额接口")
-            self.float_cv.itemconfigure(self.float_balance, text="余额  " + text, fill=C_GREEN)
         elif self.state.get("balance_error"):
             self.card_balance.config(text="获取失败", fg=C_RED)
             self.card_balance_sub.config(text="检查 api_key / 网络")
-            self.float_cv.itemconfigure(self.float_balance, text="余额  获取失败", fill=C_RED)
         else:
             self.card_balance.config(text="加载中...", fg=C_SUB)
             self.card_balance_sub.config(text="")
-            self.float_cv.itemconfigure(self.float_balance, text="余额  加载中...", fill=C_SUB)
+        # 面板余额行跟随余额状态
+        if self._float_panel_open:
+            self._refresh_float_panel()
 
         if self.state.get("balance_updated_at"):
             try:
