@@ -340,26 +340,20 @@ class App:
         self._images.append(img)
         return img
 
-    def _hide_from_taskbar(self, win):
-        """把窗口设置为工具窗口样式：不显示任务栏按钮，也不出现在 Alt+Tab。"""
+    def _win_minimize(self):
+        """最小化到任务栏（程序继续后台运行，任务栏图标可随时恢复）。"""
         try:
-            hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
-            GWL_EXSTYLE = -20
-            WS_EX_TOOLWINDOW = 0x00000080
-            get_style = ctypes.windll.user32.GetWindowLongPtrW
-            set_style = ctypes.windll.user32.SetWindowLongPtrW
-            get_style.restype = ctypes.c_ssize_t
-            set_style.restype = ctypes.c_ssize_t
-            style = get_style(hwnd, GWL_EXSTYLE)
-            set_style(hwnd, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW)
+            self.root.iconify()
         except Exception:
             pass
 
-    def _on_unmap(self, event=None):
-        """点最小化时转入后台：隐藏主窗口继续运行，双击悬浮窗可恢复。"""
+    def _win_maximize_toggle(self):
+        """最大化 / 还原切换。"""
         try:
-            if self.root.state() == "iconic":
-                self.root.withdraw()
+            if self.root.state() == "zoomed":
+                self.root.state("normal")
+            else:
+                self.root.state("zoomed")
         except Exception:
             pass
     # ================= 主窗口 =================
@@ -374,9 +368,7 @@ class App:
         except Exception:
             pass
         root.protocol("WM_DELETE_WINDOW", self._on_close)
-        # 窗口创建后：从任务栏隐藏（后台工具样式），并把最小化改为"转入后台运行"
-        root.after(200, lambda: self._hide_from_taskbar(root))
-        root.bind("<Unmap>", self._on_unmap)
+        # 保留原生标题栏（自带最小化/最大化/关闭），任务栏正常显示本程序
 
         # ---- 顶部标题条 ----
         header = tk.Frame(root, bg=C_BROWN)
@@ -391,7 +383,24 @@ class App:
                  font=(FONT, 8)).pack(anchor="w")
         self.lbl_date = tk.Label(header, text="", bg=C_BROWN, fg="#f6d9ae",
                                  font=(FONT, 10))
-        self.lbl_date.pack(side="right", padx=16)
+        self.lbl_date.pack(side="right", padx=(0, 4))
+
+        # 右上角：自定义 最小化 / 最大化(还原) / 关闭 按钮（与应用主题一致）
+        btn_bar = tk.Frame(header, bg=C_BROWN)
+        btn_bar.pack(side="right", padx=(0, 6))
+
+        def _mk_btn(text, command):
+            lb = tk.Label(btn_bar, text=text, bg=C_BROWN, fg="#f6d9ae",
+                          font=(FONT, 11, "bold"), padx=10, pady=2, cursor="hand2")
+            lb.pack(side="left")
+            lb.bind("<Button-1>", lambda e: command())
+            lb.bind("<Enter>", lambda e: lb.config(bg=C_BROWN_MID))
+            lb.bind("<Leave>", lambda e: lb.config(bg=C_BROWN))
+            return lb
+
+        _mk_btn("—", self._win_minimize)
+        _mk_btn("□", self._win_maximize_toggle)
+        _mk_btn("✕", self._on_close)
 
         # ---- 顶部指标卡 ----
         cards = tk.Frame(root, bg=C_BG)
