@@ -26,6 +26,7 @@ import kun_sync
 import proxy_server
 import scheduler
 import storage
+import yq_sync
 
 
 # ================= 路径与资源 =================
@@ -95,6 +96,11 @@ DEFAULT_CONFIG = {
         "sync_interval_seconds": 3,
     },
     "dsh": {
+        "enabled": True,
+        "projcache_path": "",
+        "sync_interval_seconds": 5,
+    },
+    "yq": {
         "enabled": True,
         "projcache_path": "",
         "sync_interval_seconds": 5,
@@ -223,6 +229,10 @@ class App:
         threading.Thread(target=dsh_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
+        # YQ Harness 数据同步线程：只读 YQ 会话用量投影缓存
+        threading.Thread(target=yq_sync.run,
+                         args=(self.config, self.settings, self.state, self.stop_event),
+                         daemon=True).start()
 
         # 主窗口与悬浮窗
         self.root = tk.Tk()
@@ -284,6 +294,11 @@ class App:
     def _toggle_dsh(self):
         """设置页：开关 DeepSeek Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
         self.config.setdefault("dsh", {})["enabled"] = self.dsh_var.get()
+        self._save_config()
+
+    def _toggle_yq(self):
+        """设置页：开关 YQ Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
+        self.config.setdefault("yq", {})["enabled"] = self.yq_var.get()
         self._save_config()
 
     def _init_style(self):
@@ -661,7 +676,7 @@ class App:
         ttk.Button(key_box, text="保存 Key", command=self._save_api_key).pack(
             side="left", padx=(6, 0))
 
-        # 数据源开关（三个数据源全部保留，可分别开关，修改即时生效）
+        # 数据源开关（五个数据源全部保留，可分别开关，修改即时生效）
         tk.Label(left, text="数据源开关:", bg=C_BG, fg=C_BROWN_DARK,
                  font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 4))
         self.proxy_var = tk.BooleanVar(value=bool(self.config.get("proxy_enabled", True)))
@@ -678,7 +693,11 @@ class App:
         self.dsh_var = tk.BooleanVar(
             value=bool((self.config.get("dsh") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="DeepSeek Harness 同步", variable=self.dsh_var,
-                        command=self._toggle_dsh).pack(anchor="w", pady=(0, 10))
+                        command=self._toggle_dsh).pack(anchor="w", pady=(0, 4))
+        self.yq_var = tk.BooleanVar(
+            value=bool((self.config.get("yq") or {}).get("enabled", True)))
+        ttk.Checkbutton(left, text="YQ Harness 同步", variable=self.yq_var,
+                        command=self._toggle_yq).pack(anchor="w", pady=(0, 10))
 
         # 代理状态
         self.lbl_setting_proxy = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
@@ -691,7 +710,10 @@ class App:
         self.lbl_kunsync.pack(anchor="w", pady=(0, 6))
         # DeepSeek Harness 数据同步状态
         self.lbl_dshsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_dshsync.pack(anchor="w", pady=(0, 12))
+        self.lbl_dshsync.pack(anchor="w", pady=(0, 6))
+        # YQ Harness 数据同步状态
+        self.lbl_yqsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
+        self.lbl_yqsync.pack(anchor="w", pady=(0, 12))
 
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
@@ -1048,6 +1070,19 @@ class App:
                 self.lbl_dshsync.config(
                     text=f"Harness 同步：运行中 · 累计导入 {fmt_int(dsh.get('total_added', 0))} 条"
                          f" · {dsh.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.7) YQ Harness 数据同步状态
+        if hasattr(self, "lbl_yqsync"):
+            yq = self.state.get("yq_sync")
+            if not yq or not yq.get("enabled"):
+                self.lbl_yqsync.config(text="YQ Harness 同步：未启用", fg=C_SUB)
+            elif yq.get("error"):
+                self.lbl_yqsync.config(
+                    text="YQ Harness 同步：读取失败 " + str(yq["error"]), fg=C_RED)
+            else:
+                self.lbl_yqsync.config(
+                    text=f"YQ Harness 同步：运行中 · 累计导入 {fmt_int(yq.get('total_added', 0))} 条"
+                         f" · {yq.get('last_time', '')}", fg=C_GREEN)
 
         # 5) 日期与仪表盘图表
         self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))

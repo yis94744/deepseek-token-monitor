@@ -9,6 +9,7 @@
 - **Codex 对话记录**：直接读取 CC Switch 的用量数据库，Codex 对话也能自动记录
 - **Kun 用量同步**：自动读取 Kun 客户端的本地会话用量事件（`~/.kun/data/threads/`），Kun 对话自动统计，无需改任何地址
 - **DeepSeek Harness 同步**：自动读取 Harness 的会话用量投影缓存（`~/.dsh/storages/session_projcache.json`），Harness 对话自动统计
+- **YQ Harness 同步**：自动读取 YQ Harness 的会话用量投影缓存（`%APPDATA%\YQ\yq-home\storages\session_projcache.json`，支持 `YQ_HOME` 环境变量），YQ 对话自动统计
 - **每日更新**：每天 00:00 自动结算当日用量，生成每日总结
 - **周/月总结**：自动生成最近 7 天周总结与整月总结
 - **动态提示**：每次 token 消耗增加时，悬浮窗弹出 `+N` 动画效果
@@ -39,7 +40,13 @@
 1. 启动软件即可，Harness 会把会话用量投影写到 `~/.dsh/storages/session_projcache.json`
 2. 软件每 5 秒只读同步，按会话差分导入 token 用量并计费
 
-**方式四：其他客户端走本地代理（可选）**
+**方式四：YQ Harness（自动，无需任何配置）**
+
+1. 启动软件即可，YQ Harness 会把会话用量投影写到 `%APPDATA%\YQ\yq-home\storages\session_projcache.json`（桌面端通过 `YQ_HOME` 环境变量指定数据目录，软件自动识别）
+2. 软件每 5 秒只读同步，按会话差分导入 token 用量并计费
+3. 模型归属：手动映射 > 本地 API 解析 > YQ `settings.yaml` 默认模型（`agent-default-model`），解析不到时按 `unknown_model_fallback` 计费
+
+**方式五：其他客户端走本地代理（可选）**
 
 1. 将客户端 DeepSeek 的 `base_url` 从 `https://api.deepseek.com` 改为 `http://127.0.0.1:8787`
 2. 流式请求需开启 `"stream_options": {"include_usage": true}` 才能返回精确的 token 用量
@@ -58,7 +65,11 @@
   - `api_base`：Harness 本地地址（默认 `http://127.0.0.1:3080`），用于解析每个会话使用的模型（pro / flash），保证计费正确
   - `model_refresh_seconds`：模型缓存刷新间隔（默认 300 秒）
   - `models`：可选手动指定 `{会话ID: 模型名}`，优先级高于自动解析
-- 四个数据源（本地代理 / CC Switch / Kun / Harness）可在设置页「数据源开关」中分别开关，修改即时生效
+- `yq`：YQ Harness 同步设置（默认开启，读取 `%APPDATA%\YQ\yq-home\storages\session_projcache.json`，可用 `projcache_path` 覆盖默认路径；优先识别 `YQ_HOME` 环境变量）
+  - `api_base`：YQ 本地地址（默认 `http://127.0.0.1:3080`，与 Harness 默认端口一致；YQ 桌面端端口随机时可不填，自动退回 settings.yaml 默认模型）
+  - `model_refresh_seconds`：模型缓存刷新间隔（默认 300 秒）
+  - `models`：可选手动指定 `{会话ID: 模型名}`，优先级高于自动解析
+- 五个数据源（本地代理 / CC Switch / Kun / DeepSeek Harness / YQ Harness）可在设置页「数据源开关」中分别开关，修改即时生效
 
 ## 源码运行 / 打包
 

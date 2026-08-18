@@ -6,8 +6,8 @@
 默认库路径为 %APPDATA%\\DeepSeekTokenMonitor\\data\\usage.db。
 
 步骤：
-1. dsh 会话按解析出的真实模型重归属（沿用 dsh_sync 的模型解析）；
-2. 所有行（dsh / cc / kun / 代理）按 model + created_at 重新取价并重算 cost：
+1. dsh / yq 会话按解析出的真实模型重归属（沿用 dsh_sync / yq_sync 的模型解析）；
+2. 所有行（dsh / yq / cc / kun / 代理）按 model + created_at 重新取价并重算 cost：
    - 2026-08-17 之前 → legacy 平峰价；
    - 高峰时段（默认每日 9:00-14:00）→ peak 价；
    - 其余 → 空闲价。
@@ -21,6 +21,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dsh_sync
 import pricing
+import yq_sync
 
 APPDATA = os.environ.get("APPDATA") or r"C:\Users\kelang\AppData\Roaming"
 DB = sys.argv[1] if len(sys.argv) > 1 else os.path.join(APPDATA, "DeepSeekTokenMonitor", "data", "usage.db")
@@ -34,18 +35,19 @@ print("官网新价生效:", pricing._legacy_until(config).strftime("%Y-%m-%d"),
 con = sqlite3.connect(DB)
 cur = con.cursor()
 
-# ---- 1) dsh 会话模型重归属 ----
-sids = [r[0] for r in cur.execute(
-    "SELECT DISTINCT substr(source_key, 5, instr(substr(source_key, 5), ':') - 1) "
-    "FROM requests WHERE source_key LIKE 'dsh:%'").fetchall()]
-models = dsh_sync._resolve_session_models(config, {}, sids)
-print("\ndsh 模型解析:", json.dumps(models, ensure_ascii=False))
-for sid in sids:
-    model = models.get(sid)
-    if not model:
-        continue
-    cur.execute("UPDATE requests SET model=? WHERE source_key LIKE ? AND model != ?",
-                (model, "dsh:" + sid + ":%", model))
+# ---- 1) dsh / yq 会话模型重归属 ----
+for prefix, syncer in (("dsh", dsh_sync), ("yq", yq_sync)):
+    sids = [r[0] for r in cur.execute(
+        "SELECT DISTINCT substr(source_key, 5, instr(substr(source_key, 5), ':') - 1) "
+        "FROM requests WHERE source_key LIKE '%s:%%'" % prefix).fetchall()]
+    models = syncer._resolve_session_models(config, {}, sids)
+    print("\n%s 模型解析:" % prefix, json.dumps(models, ensure_ascii=False))
+    for sid in sids:
+        model = models.get(sid)
+        if not model:
+            continue
+        cur.execute("UPDATE requests SET model=? WHERE source_key LIKE ? AND model != ?",
+                    (model, prefix + ":" + sid + ":%", model))
 con.commit()
 
 # ---- 2) 全库重算费用 ----
@@ -82,7 +84,8 @@ print("改写行数: %d, 时间解析失败(未改): %d" % (fixed, bad))
 # ---- 3) 按来源/模型汇总 ----
 print("\n按来源汇总:")
 for r in cur.execute(
-    "SELECT CASE WHEN source_key LIKE 'dsh:%' THEN 'dsh' WHEN source_key LIKE 'cc:%' THEN 'cc' "
+    "SELECT CASE WHEN source_key LIKE 'dsh:%' THEN 'dsh' WHEN source_key LIKE 'yq:%' THEN 'yq' "
+    "WHEN source_key LIKE 'cc:%' THEN 'cc' "
     "WHEN source_key LIKE 'kun:%' THEN 'kun' ELSE 'proxy' END AS src, "
     "COUNT(*), SUM(cost) FROM requests GROUP BY src").fetchall():
     print("  %-6s %5d 行  费用 %10.6f 元" % (r[0], r[1], r[2] or 0))

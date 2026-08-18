@@ -28,6 +28,16 @@
       "session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx": "deepseek-v4-pro"
     }
   },
+  "yq": {
+    "enabled": true,
+    "projcache_path": "",
+    "sync_interval_seconds": 5,
+    "api_base": "http://127.0.0.1:3080",
+    "model_refresh_seconds": 300,
+    "models": {
+      "session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx": "deepseek-v4-pro"
+    }
+  },
   "models": {
     "deepseek-v4-flash": {
       "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.05/未命中1.5/输出4.5；高峰 命中0.10/未命中3.0/输出9.0 元每百万tokens；8-17 之前按 legacy 平峰价",

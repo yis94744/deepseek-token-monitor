@@ -339,6 +339,19 @@ def dsh_cumulative(sid: str):
     丢失都不会漏记或重复计费——重启后第一次同步会补上"上次入库以来的全部
     增量"；去重键用累计总量本身，同一总量只入库一次。
     """
+    return _cumulative("dsh", sid)
+
+
+def yq_cumulative(sid: str):
+    """返回某 YQ Harness 会话已入库的累计总量 (hit, miss, comp)，无记录则 None。
+
+    与 dsh_cumulative 同口径（无状态差分、总量去重），前缀为 yq:。
+    """
+    return _cumulative("yq", sid)
+
+
+def _cumulative(prefix: str, sid: str):
+    """按来源前缀求某会话已入库的累计总量，供无状态差分同步使用。"""
     with _lock:
         conn = _conn()
         try:
@@ -347,7 +360,7 @@ def dsh_cumulative(sid: str):
                 "COALESCE(SUM(prompt_cache_miss_tokens),0), "
                 "COALESCE(SUM(completion_tokens),0) "
                 "FROM requests WHERE source_key LIKE ?",
-                ("dsh:" + sid + ":%",),
+                (prefix + ":" + sid + ":%",),
             ).fetchone()
         finally:
             conn.close()
