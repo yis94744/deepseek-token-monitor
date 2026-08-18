@@ -6,6 +6,7 @@
 - 悬浮窗：360 风格圆形噜噜球，可拖动、悬停显示消耗金额、单击弹出使用额度面板、右键操作，可在设置里开关
 - 内置本地代理 http://127.0.0.1:8787，自动统计并计费 DeepSeek API 调用
 - 每天 00:00 自动日结、每周一自动周结、每月 1 日自动月结
+- 自动更新检测：启动及每 6 小时检查 GitHub Releases 最新版本，发现新版本弹窗提示并可一键跳转下载
 
 使用前提：把调用 DeepSeek 的 base_url 改成 http://127.0.0.1:8787；
 流式请求需加 "stream_options": {"include_usage": true}。
@@ -18,6 +19,7 @@ import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
+import webbrowser
 from datetime import datetime
 from tkinter import messagebox, ttk
 
@@ -27,7 +29,11 @@ import kun_sync
 import proxy_server
 import scheduler
 import storage
+import updater
 import yq_sync
+
+# 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
+APP_VERSION = "1.5.0"
 
 
 # ================= 路径与资源 =================
@@ -105,6 +111,10 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "projcache_path": "",
         "sync_interval_seconds": 5,
+    },
+    "update_check": {
+        "enabled": True,
+        "interval_hours": 6,
     },
     "models": {
         "deepseek-v4-flash": {
@@ -253,8 +263,13 @@ class App:
         self._init_style()
         self._images = []           # 保存图片引用，防止被垃圾回收
         self._page_refreshers = {}  # 页签索引 -> 刷新函数
+        self._update_checked = False
         self._build_main_window()
         self._build_float_window()
+
+        # 自动更新检测线程：启动即检查一次，之后按配置间隔周期检查
+        updater.init_log(DATA_DIR)
+        threading.Thread(target=self._update_check_loop, daemon=True).start()
 
     # ---------- 基础 ----------
     def _load_config(self) -> dict:
@@ -384,6 +399,11 @@ class App:
         self.lbl_date = tk.Label(header, text="", bg=C_BROWN, fg="#f6d9ae",
                                  font=(FONT, 10))
         self.lbl_date.pack(side="right", padx=(0, 4))
+        # 发现新版本提示（点击跳转下载页）
+        self.lbl_update_banner = tk.Label(header, text="", bg=C_BROWN, fg=C_GOLD,
+                                          font=(FONT, 9, "bold"), cursor="hand2")
+        self.lbl_update_banner.pack(side="right", padx=8)
+        self.lbl_update_banner.bind("<Button-1>", lambda e: self._open_update_page())
 
         # 右上角：自定义 最小化 / 最大化(还原) / 关闭 按钮（与应用主题一致）
         btn_bar = tk.Frame(header, bg=C_BROWN)
@@ -741,6 +761,13 @@ class App:
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
             anchor="w", fill="x", pady=2)
+        ttk.Button(left, text="检查更新", command=self._check_update_now).pack(
+            anchor="w", fill="x", pady=2)
+        # 更新检查状态（点击"发现新版本"可直接下载）
+        self.lbl_updcheck = tk.Label(left, text="", bg=C_BG, fg=C_SUB, font=(FONT, 9),
+                                     cursor="hand2")
+        self.lbl_updcheck.pack(anchor="w", pady=(0, 6))
+        self.lbl_updcheck.bind("<Button-1>", lambda e: self._open_update_page())
         ttk.Button(left, text="打开配置文件 config.json",
                    command=lambda: os.startfile(CONFIG_PATH)).pack(anchor="w", fill="x", pady=2)
         ttk.Button(left, text="打开数据文件夹",
@@ -1162,6 +1189,27 @@ class App:
         if self._float_panel_open:
             self._refresh_float_panel()
 
+        # 2.5) 更新检测状态（标题条横幅 + 设置页标签）
+        up = self.state.get("update")
+        if hasattr(self, "lbl_update_banner"):
+            if up and up.get("available"):
+                self.lbl_update_banner.config(text=f"发现新版本 {up['tag']} · 点此下载")
+            else:
+                self.lbl_update_banner.config(text="")
+        if hasattr(self, "lbl_updcheck"):
+            if not up:
+                self.lbl_updcheck.config(text="更新检查：未检查", fg=C_SUB)
+            elif up.get("available"):
+                self.lbl_updcheck.config(
+                    text=f"发现新版本 {up['tag']}（当前 {APP_VERSION}）· 点击下载",
+                    fg=C_RED)
+            elif up.get("checked_at") == "检查中...":
+                self.lbl_updcheck.config(text="更新检查：检查中...", fg=C_SUB)
+            else:
+                self.lbl_updcheck.config(
+                    text=f"已是最新版本 {APP_VERSION} · {up.get('checked_at', '')}",
+                    fg=C_GREEN)
+
         if self.state.get("balance_updated_at"):
             try:
                 t = datetime.fromisoformat(self.state["balance_updated_at"]).strftime("%H:%M:%S")
@@ -1266,6 +1314,71 @@ class App:
                 self.state["balance_error"] = str(exc)
             self.state["balance_updated_at"] = datetime.now().isoformat(timespec="seconds")
         threading.Thread(target=work, daemon=True).start()
+
+    # ---------- 自动更新检测 ----------
+    def _update_check_loop(self):
+        """后台线程：启动即检查一次，之后按 config.update_check.interval_hours 周期检查。"""
+        first = True
+        while True:
+            cfg = self.config.get("update_check") or {}
+            if not cfg.get("enabled", True):
+                self.stop_event.wait(3600)  # 被关闭时每小时看一眼配置
+                continue
+            interval = max(1, int(cfg.get("interval_hours", 6))) * 3600
+            if self.stop_event.wait(0 if first else interval):
+                return
+            first = False
+            self._run_update_check()
+
+    def _run_update_check(self):
+        """执行一次更新检查：查询 GitHub 最新 release 并写入 state（失败静默）。"""
+        try:
+            info = updater.check_latest()
+            if not info or not info.get("tag"):
+                return
+            self.state["update"] = {"tag": info["tag"], "url": info["url"],
+                                    "name": info.get("name") or "",
+                                    "checked_at": datetime.now().strftime("%H:%M:%S")}
+            if updater.is_newer(info["tag"], updater.parse_version(APP_VERSION)):
+                self.state["update"]["available"] = True
+                updater._log("发现新版本 %s（当前 %s）" % (info["tag"], APP_VERSION))
+                self.root.after(0, self._notify_update, info)
+            else:
+                updater._log("已是最新版本 %s" % info["tag"])
+        except Exception as exc:
+            updater._log("检查异常: %s" % exc)
+
+    def _notify_update(self, info: dict):
+        """弹出新版本提示：是=前往下载；否=本次版本不再提醒。"""
+        try:
+            if self.settings.get("update_ignore") == info.get("tag"):
+                return
+            if not self.root.winfo_exists():
+                return
+            go = messagebox.askyesno(
+                "发现新版本",
+                f"发现新版本 {info.get('tag')}（当前 {APP_VERSION}）\n\n"
+                f"{info.get('name') or ''}\n\n"
+                "是否前往 GitHub 下载最新安装包？")
+            if go:
+                webbrowser.open(info.get("url") or (updater.RELEASE_URL % info.get("tag")))
+            else:
+                self.settings["update_ignore"] = info.get("tag")
+                save_settings(self.settings)
+        except Exception:
+            pass
+
+    def _check_update_now(self):
+        """设置页按钮：立即检查更新。"""
+        self.state["update"] = {"checked_at": "检查中..."}
+        threading.Thread(target=self._run_update_check, daemon=True).start()
+
+    def _open_update_page(self):
+        """打开最新 release 下载页。"""
+        info = self.state.get("update") or {}
+        url = info.get("url") or (updater.RELEASE_URL % (info.get("tag") or ""))
+        if url:
+            webbrowser.open(url)
 
     def _on_close(self):
         if messagebox.askokcancel("退出", "确定要退出水豚噜噜监控吗？\n退出后本地代理与统计都会停止。"):
