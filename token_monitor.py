@@ -160,6 +160,7 @@ C_ORANGE = "#f1ac38"      # 主橙（高亮/按钮）
 C_GOLD = "#fed15e"        # 金黄（选中）
 C_ORANGE_DEEP = "#d77522" # 深橙
 C_GREEN = "#6fa36b"       # 余额绿
+C_GREEN_DEEP = "#1e9e3f"  # 悬停金额绿（圆球上方，醒目易读）
 C_RED = "#d9534f"         # 错误红
 C_TEXT = "#4a2f1d"        # 正文
 C_SUB = "#8a6a4d"         # 次要文字
@@ -865,7 +866,8 @@ class App:
             messagebox.showinfo("已保存", f"余额刷新间隔已改为 {value} 秒，立即生效。")
     # ================= 悬浮窗（360 风格圆形噜噜球） =================
     def _build_float_window(self):
-        S = 140  # 圆球窗口尺寸：正方形窗口 + 透明四角 = 视觉圆形
+        IMG = 85     # 噜噜头像尺寸（logo_round 256 -> subsample 3），圆圈与图片完全等大
+        TEXT_H = 26  # 圆球上方的悬停金额文字区（透明，仅绿色文字可见）
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
@@ -874,22 +876,24 @@ class App:
         except Exception:
             pass
         self.float_win = win
-        self.float_size = S
+        self.float_size = IMG
         self._float_drag_off = (0, 0)
         self._float_drag_start = (0, 0)
         self._float_panel_open = False
 
-        cv = tk.Canvas(win, width=S, height=S, highlightthickness=0, bg=C_KEY)
+        w, h = IMG, IMG + TEXT_H
+        cv = tk.Canvas(win, width=w, height=h, highlightthickness=0, bg=C_KEY)
         cv.pack()
         self.float_cv = cv
 
-        # 球体：外橙圈 + 奶白底
-        cv.create_oval(2, 2, S - 2, S - 2, fill=C_CARD, outline=C_ORANGE, width=3)
-        # 噜噜圆形头像（logo_round 256 -> 64px，居中偏上，留出底部文字区）
-        avatar = self._keep_image(_res("logo_round.png"), subsample=4)
-        cv.create_image(S / 2, 52, image=avatar)
-        # 底部圆弧区：悬停时显示当前消耗金额（自动缩字号，不超出小球）
-        self.float_cost = cv.create_text(S / 2, 114, text="", fill=C_BROWN_DARK,
+        # 圆球 = 噜噜圆形头像本身：奶白底与图片等大（防透明角落穿帮），
+        # 头像铺满整个圆，边缘一条橙色细圈（不改变圆圈尺寸）
+        cv.create_oval(0, TEXT_H, IMG, h, fill=C_CARD, outline="")
+        avatar = self._keep_image(_res("logo_round.png"), subsample=3)  # 256 -> 约85
+        cv.create_image(w / 2, TEXT_H + IMG / 2, image=avatar)
+        cv.create_oval(1, TEXT_H + 1, w - 1, h - 1, outline=C_ORANGE, width=2)
+        # 圆球上方透明区：悬停时显示当前消耗金额（绿色，自动缩字号不超出球宽）
+        self.float_cost = cv.create_text(w / 2, 7, text="", fill=C_GREEN_DEEP,
                                          font=(MONO, 8, "bold"))
 
         # 事件：悬停显示金额 / 单击开关面板 / 拖动 / 双击主界面 / 右键菜单
@@ -908,7 +912,7 @@ class App:
         x = self.settings.get("float_x")
         y = self.settings.get("float_y")
         if x is None or y is None:
-            x, y = win.winfo_screenwidth() - S - 30, 90
+            x, y = win.winfo_screenwidth() - w - 30, 90
         win.geometry(f"+{x}+{y}")
         if not self.settings.get("float_window", True):
             win.withdraw()
@@ -1012,9 +1016,9 @@ class App:
             pass
 
     def _set_ball_cost(self, text: str):
-        """设置圆球底部金额文字：字号自动缩小、必要时截断，保证不超出小球。"""
+        """设置圆球上方金额文字：字号自动缩小、必要时截断，保证不超出球宽。"""
         cv = self.float_cv
-        max_w = self.float_size - 36  # 底部圆弧内的弦宽（留白防溢出）
+        max_w = self.float_size - 12  # 文字区宽 = 球宽，两侧留白防溢出
         f = tkfont.Font(font=cv.itemcget(self.float_cost, "font"))
         while f.measure(text) > max_w and f.cget("size") > 6:
             f.configure(size=f.cget("size") - 1)
@@ -1058,8 +1062,8 @@ class App:
         text = "+" + fmt_int(total)
         # 连续多个弹窗略微右移错位，避免完全重叠
         self._popups = (self._popups + 1) % 3
-        x = 58 + self._popups * 10
-        item = cv.create_text(x, 26, anchor="w", text=text, fill=C_ORANGE_DEEP,
+        x = 22 + self._popups * 8
+        item = cv.create_text(x, 30, anchor="w", text=text, fill=C_ORANGE_DEEP,
                               font=(MONO, 10, "bold"))
         # 渐隐色阶：从深橙过渡到悬浮窗的奶白底色，模拟淡出（12 帧约 0.6 秒）
         colors = ["#d77522", "#df8630", "#e6963f", "#eda64e", "#f0b368",
