@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 
 # ================= 路径与资源 =================
