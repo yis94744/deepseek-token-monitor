@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.9.2"
 
 
 # ================= 路径与资源 =================
@@ -541,6 +541,11 @@ class App:
         self.lbl_proxy_status = tk.Label(status, text="代理 启动中...", bg=C_BROWN,
                                          fg=C_GOLD, font=(FONT, 9))
         self.lbl_proxy_status.pack(side="left", padx=14, pady=4)
+        # 更新检查状态（常驻可见：已是最新 / 发现新版本可点击 / 检查失败）
+        self.lbl_update_status = tk.Label(status, text="更新检查中...", bg=C_BROWN,
+                                          fg="#f6d9ae", font=(FONT, 9), cursor="hand2")
+        self.lbl_update_status.pack(side="left", padx=(0, 14))
+        self.lbl_update_status.bind("<Button-1>", lambda e: self._on_update_click())
         self.lbl_balance_time = tk.Label(status, text="", bg=C_BROWN, fg="#f6d9ae",
                                          font=(FONT, 9))
         self.lbl_balance_time.pack(side="right", padx=14, pady=4)
@@ -1182,7 +1187,7 @@ class App:
         self.lbl_updcheck = tk.Label(left, text="", bg=C_BG, fg=C_SUB, font=(FONT, 9),
                                      cursor="hand2")
         self.lbl_updcheck.pack(anchor="w", pady=(0, 6))
-        self.lbl_updcheck.bind("<Button-1>", lambda e: self._open_update_page())
+        self.lbl_updcheck.bind("<Button-1>", lambda e: self._on_update_click())
         ttk.Button(left, text="打开配置文件 config.json",
                    command=lambda: os.startfile(CONFIG_PATH)).pack(anchor="w", fill="x", pady=2)
         ttk.Button(left, text="打开数据文件夹",
@@ -1669,7 +1674,7 @@ class App:
         # 余额统计页"当前余额"跟随刷新
         self._update_balance_cur_label()
 
-        # 2.5) 更新检测状态（标题条横幅 + 设置页标签）
+        # 2.5) 更新检测状态（标题条横幅 + 设置页标签 + 底部状态栏）
         up = self.state.get("update")
         if hasattr(self, "lbl_update_banner"):
             if up and up.get("available"):
@@ -1683,12 +1688,30 @@ class App:
                 self.lbl_updcheck.config(
                     text=f"发现新版本 {up['tag']}（当前 {APP_VERSION}）· 点击下载",
                     fg=C_RED)
+            elif up.get("error"):
+                self.lbl_updcheck.config(
+                    text=f"更新检查失败（{up.get('checked_at', '')}）· 点击重试",
+                    fg=C_RED)
             elif up.get("checked_at") == "检查中...":
                 self.lbl_updcheck.config(text="更新检查：检查中...", fg=C_SUB)
             else:
                 self.lbl_updcheck.config(
                     text=f"已是最新版本 {APP_VERSION} · {up.get('checked_at', '')}",
                     fg=C_GREEN)
+        if hasattr(self, "lbl_update_status"):
+            if not up:
+                self.lbl_update_status.config(text="更新检查中...", fg="#f6d9ae")
+            elif up.get("available"):
+                self.lbl_update_status.config(
+                    text=f"发现新版本 {up['tag']} · 点击下载", fg=C_GOLD)
+            elif up.get("error"):
+                self.lbl_update_status.config(text="更新检查失败 · 点击重试", fg=C_RED)
+            elif up.get("checked_at") == "检查中...":
+                self.lbl_update_status.config(text="更新检查中...", fg="#f6d9ae")
+            else:
+                self.lbl_update_status.config(
+                    text=f"已是最新版本 {APP_VERSION} · {up.get('checked_at', '')}",
+                    fg="#9fe8a8")
 
         if self.state.get("balance_updated_at"):
             try:
@@ -1813,11 +1836,11 @@ class App:
             self._run_update_check()
 
     def _run_update_check(self):
-        """执行一次更新检查：查询 GitHub 最新 release 并写入 state（失败静默）。"""
+        """执行一次更新检查：查询 GitHub 最新 release 并写入 state（失败也记录，供界面显示）。"""
         try:
             info = updater.check_latest()
             if not info or not info.get("tag"):
-                return
+                raise RuntimeError("接口无响应")
             self.state["update"] = {"tag": info["tag"], "url": info["url"],
                                     "name": info.get("name") or "",
                                     "checked_at": datetime.now().strftime("%H:%M:%S")}
@@ -1828,7 +1851,12 @@ class App:
             else:
                 updater._log("已是最新版本 %s" % info["tag"])
         except Exception as exc:
-            updater._log("检查异常: %s" % exc)
+            # 检查失败不静默：写入 state 供状态栏/设置页显示
+            info = self.state.get("update") or {}
+            info["error"] = str(exc)
+            info["checked_at"] = datetime.now().strftime("%H:%M:%S")
+            self.state["update"] = info
+            updater._log("检查失败: %s" % exc)
 
     def _notify_update(self, info: dict):
         """弹出新版本提示：是=前往下载；否=本次版本不再提醒。"""
@@ -1861,6 +1889,14 @@ class App:
         url = info.get("url") or (updater.RELEASE_URL % (info.get("tag") or ""))
         if url:
             webbrowser.open(url)
+
+    def _on_update_click(self):
+        """点击更新状态：有新版本→打开下载页；检查失败/未检查→立即重试。"""
+        up = self.state.get("update") or {}
+        if up.get("available"):
+            self._open_update_page()
+        else:
+            self._check_update_now()
 
     def _on_close(self):
         """点关闭（×）：弹窗选择 直接关闭 或 最小化到托盘（可记住选择）。"""
