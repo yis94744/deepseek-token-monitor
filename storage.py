@@ -13,6 +13,8 @@ import sqlite3
 import threading
 from datetime import date, datetime, timedelta
 
+import pricing
+
 _lock = threading.Lock()   # 全局锁：保证多个线程访问 SQLite 时串行执行
 _db_path = None
 
@@ -361,6 +363,55 @@ def balance_history(days: int = None) -> list:
         finally:
             conn.close()
     return [{"date": r[0], "balance": round(r[1], 4), "updated_at": r[2]} for r in rows]
+
+
+def period_stats(days: int = None, config: dict = None) -> list:
+    """按天分时段统计（高峰 / 非高峰），返回按日期倒序的列表。
+
+    每项：date / peak_requests / peak_tokens / peak_cost /
+          off_requests / off_tokens / off_cost
+    时段判定复用计价规则（默认每日 09:00-14:00 高峰，可配置 peak_hours 覆盖），
+    按每条请求的 created_at 时刻归属。
+    """
+    where, args = "", ()
+    if days:
+        start = (date.today() - timedelta(days=days - 1)).isoformat()
+        where = " WHERE date >= ?"
+        args = (start,)
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT date, created_at, prompt_cache_hit_tokens, "
+                "prompt_cache_miss_tokens, completion_tokens, cost FROM requests" + where +
+                " ORDER BY date DESC", args).fetchall()
+        finally:
+            conn.close()
+    result = {}
+    for date_s, created_at, hit, miss, comp, cost in rows:
+        peak = False
+        try:
+            peak = pricing.is_peak_hour(datetime.fromisoformat(created_at), config)
+        except Exception:
+            pass
+        d = result.setdefault(date_s, {
+            "date": date_s, "peak_requests": 0, "peak_tokens": 0, "peak_cost": 0.0,
+            "off_requests": 0, "off_tokens": 0, "off_cost": 0.0})
+        tokens = hit + miss + comp
+        if peak:
+            d["peak_requests"] += 1
+            d["peak_tokens"] += tokens
+            d["peak_cost"] += cost or 0
+        else:
+            d["off_requests"] += 1
+            d["off_tokens"] += tokens
+            d["off_cost"] += cost or 0
+    out = []
+    for d in result.values():  # 按首次出现顺序（即日期倒序）
+        d["peak_cost"] = round(d["peak_cost"], 6)
+        d["off_cost"] = round(d["off_cost"], 6)
+        out.append(d)
+    return out
 
 def add_external_request(source_key: str, created_at, model: str, hit: int, miss: int,
                          completion: int, cost: float) -> bool:

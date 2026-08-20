@@ -20,7 +20,7 @@ import threading
 import tkinter as tk
 import tkinter.font as tkfont
 import webbrowser
-from datetime import datetime
+from datetime import date, datetime
 from tkinter import messagebox, ttk
 
 import cc_switch_sync
@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"
 
 
 # ================= 路径与资源 =================
@@ -529,9 +529,10 @@ class App:
             nb, "本月", 3, storage.this_month_stats, storage.this_month_breakdown)
         self._page_refreshers[4] = self._add_daily_page(nb, 4)
         self._page_refreshers[5] = self._add_balance_page(nb, 5)
-        self._page_refreshers[6] = self._add_model_page(nb, 6)
-        self._page_refreshers[7] = self._add_history_page(nb, 7)
-        self._page_refreshers[8] = self._add_settings_page(nb, 8)
+        self._page_refreshers[6] = self._add_period_page(nb, 6)
+        self._page_refreshers[7] = self._add_model_page(nb, 7)
+        self._page_refreshers[8] = self._add_history_page(nb, 8)
+        self._page_refreshers[9] = self._add_settings_page(nb, 9)
         nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # ---- 底部状态栏 ----
@@ -902,6 +903,120 @@ class App:
             c.create_text(x, h - pad_b + 12, text=data[i]["date"][5:],
                           fill=C_SUB, font=(FONT, 8))
         c.create_text(pad_l, 10, anchor="w", text="余额/元", fill=C_SUB, font=(FONT, 8))
+
+    # ---------- 时段统计页（高峰/非高峰） ----------
+    def _add_period_page(self, nb, index):
+        page = tk.Frame(nb, bg=C_BG)
+        nb.add(page, text="时段统计")
+
+        top = tk.Frame(page, bg=C_BG)
+        top.pack(fill="x", padx=12, pady=8)
+        self.lbl_peak_today = tk.Label(top, text="", bg=C_BG, fg=C_ORANGE_DEEP,
+                                       font=(FONT, 9))
+        self.lbl_peak_today.grid(row=0, column=0, sticky="w", padx=(0, 14))
+        self.lbl_off_today = tk.Label(top, text="", bg=C_BG, fg=C_GREEN, font=(FONT, 9))
+        self.lbl_off_today.grid(row=0, column=1, sticky="w", padx=(0, 14))
+        self.lbl_peak_month = tk.Label(top, text="", bg=C_BG, fg=C_ORANGE_DEEP,
+                                       font=(FONT, 9))
+        self.lbl_peak_month.grid(row=0, column=2, sticky="w", padx=(0, 14))
+        self.lbl_off_month = tk.Label(top, text="", bg=C_BG, fg=C_GREEN, font=(FONT, 9))
+        self.lbl_off_month.grid(row=0, column=3, sticky="w")
+
+        tk.Label(page, text="近 30 天 高峰/非高峰 费用（高峰时段默认每日 09:00-14:00，价格翻倍）",
+                 bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
+        chart = tk.Canvas(page, height=180, bg=C_CARD, highlightthickness=1,
+                          highlightbackground=C_BROWN_LIGHT)
+        chart.pack(fill="x", padx=12, pady=(0, 4))
+        legend = tk.Frame(page, bg=C_BG)
+        legend.pack(fill="x", padx=12)
+        tk.Label(legend, text="● 高峰费用", bg=C_BG, fg=C_ORANGE_DEEP,
+                 font=(FONT, 8)).pack(side="left", padx=(0, 12))
+        tk.Label(legend, text="● 非高峰费用", bg=C_BG, fg=C_GREEN,
+                 font=(FONT, 8)).pack(side="left")
+
+        tree = ttk.Treeview(page, columns=("date", "pr", "pt", "pc", "or", "ot", "oc"),
+                            show="headings")
+        for col, text, width in (("date", "日期", 95), ("pr", "高峰请求", 80),
+                                 ("pt", "高峰Token", 95), ("pc", "高峰费用", 90),
+                                 ("or", "非高峰请求", 80), ("ot", "非高峰Token", 95),
+                                 ("oc", "非高峰费用", 95)):
+            tree.heading(col, text=text)
+            tree.column(col, width=width, anchor="center" if col != "date" else "w")
+        tree.tag_configure("total", background="#fdf0d8", foreground=C_ORANGE_DEEP)
+        tree.pack(fill="both", expand=True, padx=12, pady=(8, 12))
+
+        def refresh():
+            rows = storage.period_stats(config=self.config)
+            today = date.today().isoformat()
+            month = date.today().strftime("%Y-%m")
+            p_today = next((r for r in rows if r["date"] == today), None)
+            mrows = [r for r in rows if r["date"].startswith(month)]
+
+            def msum(key):
+                return sum(r[key] for r in mrows)
+
+            self.lbl_peak_today.config(
+                text=f"今日高峰  {fmt_money(p_today['peak_cost'] if p_today else 0)}")
+            self.lbl_off_today.config(
+                text=f"今日非高峰  {fmt_money(p_today['off_cost'] if p_today else 0)}")
+            self.lbl_peak_month.config(text=f"本月高峰  {fmt_money(msum('peak_cost'))}")
+            self.lbl_off_month.config(text=f"本月非高峰  {fmt_money(msum('off_cost'))}")
+            self._draw_period_bars(chart, list(reversed(storage.period_stats(30, self.config))))
+            for item in tree.get_children():
+                tree.delete(item)
+            for r in rows:
+                tree.insert("", "end", values=(
+                    r["date"], fmt_int(r["peak_requests"]), fmt_int(r["peak_tokens"]),
+                    fmt_money(r["peak_cost"]), fmt_int(r["off_requests"]),
+                    fmt_int(r["off_tokens"]), fmt_money(r["off_cost"])))
+            if rows:
+                tree.insert("", "end", values=(
+                    "合计", fmt_int(sum(r["peak_requests"] for r in rows)),
+                    fmt_int(sum(r["peak_tokens"] for r in rows)),
+                    fmt_money(sum(r["peak_cost"] for r in rows)),
+                    fmt_int(sum(r["off_requests"] for r in rows)),
+                    fmt_int(sum(r["off_tokens"] for r in rows)),
+                    fmt_money(sum(r["off_cost"] for r in rows))), tags=("total",))
+
+        refresh()
+        return refresh
+
+    @staticmethod
+    def _draw_period_bars(c, data):
+        """近 30 天 高峰/非高峰 费用堆叠柱状图（data 升序，上=高峰 下=非高峰）。"""
+        c.delete("all")
+        w = c.winfo_width() or 400
+        h = c.winfo_height() or 180
+        pad_l, pad_r, pad_t, pad_b = 46, 10, 18, 26
+        plot_w = max(w - pad_l - pad_r, 10)
+        plot_h = max(h - pad_t - pad_b, 10)
+        n = len(data)
+        if n <= 0:
+            c.create_text(w / 2, h / 2, text="暂无数据", fill=C_SUB, font=(FONT, 9))
+            return
+        maxv = max((d["peak_cost"] + d["off_cost"] for d in data), default=0) or 1.0
+        c.create_line(pad_l, h - pad_b, w - pad_r, h - pad_b, fill=C_BROWN_LIGHT)
+        slot = plot_w / n
+        bar_w = max(slot * 0.55, 3)
+        for i, d in enumerate(data):
+            cx = pad_l + slot * i + slot / 2
+            y_base = h - pad_b
+            bh_p = d["peak_cost"] / maxv * plot_h
+            bh_o = d["off_cost"] / maxv * plot_h
+            c.create_rectangle(cx - bar_w / 2, y_base - bh_p - bh_o,
+                               cx + bar_w / 2, y_base - bh_o, fill=C_ORANGE_DEEP, outline="")
+            c.create_rectangle(cx - bar_w / 2, y_base - bh_o,
+                               cx + bar_w / 2, y_base, fill=C_GREEN, outline="")
+            total = d["peak_cost"] + d["off_cost"]
+            if total > 0:
+                c.create_text(cx, y_base - bh_p - bh_o - 8, text=f"{total:.2f}",
+                              fill=C_BROWN_DARK, font=(MONO, 7))
+            if n <= 20 or i % 2 == 0:
+                c.create_text(cx, h - pad_b + 12, text=d["date"][5:],
+                              fill=C_SUB, font=(FONT, 8))
+        c.create_text(pad_l, 10, anchor="w", text="元/日（上=高峰 下=非高峰）",
+                      fill=C_SUB, font=(FONT, 8))
 
     # ---------- 模型统计页 ----------
     def _add_model_page(self, nb, index):
