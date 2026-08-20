@@ -62,10 +62,41 @@ def check_latest() -> dict:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         tag = data.get("tag_name") or ""
+        setup_url = ""
+        for asset in data.get("assets") or []:
+            if str(asset.get("name") or "").lower() == "deepseektokenmonitor-setup.exe":
+                setup_url = asset.get("browser_download_url") or ""
+                break
         return {"tag": tag,
                 "url": data.get("html_url") or (RELEASE_URL % tag),
                 "name": data.get("name") or "",
-                "published": data.get("published_at") or ""}
+                "published": data.get("published_at") or "",
+                "setup_url": setup_url}
     except Exception as exc:
         _log("检查失败(静默): %s" % exc)
         return None
+
+
+def download(url: str, dest: str, progress_cb=None, cancel_event=None,
+             chunk: int = 64 * 1024) -> None:
+    """流式下载文件到 dest，按块回调 progress_cb(downloaded, total)。
+
+    cancel_event 置位时中断并抛 RuntimeError("已取消")；下载不完整同样抛错。
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": "DeepSeekTokenMonitor"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        total = int(resp.headers.get("Content-Length") or 0)
+        done = 0
+        with open(dest, "wb") as f:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("已取消")
+                data = resp.read(chunk)
+                if not data:
+                    break
+                f.write(data)
+                done += len(data)
+                if progress_cb is not None:
+                    progress_cb(done, total)
+    if total and done != total:
+        raise RuntimeError("下载不完整（%d/%d 字节）" % (done, total))

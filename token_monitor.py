@@ -15,6 +15,7 @@ import ctypes
 import json
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -33,7 +34,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 
 
 # ================= 路径与资源 =================
@@ -1843,6 +1844,7 @@ class App:
                 raise RuntimeError("接口无响应")
             self.state["update"] = {"tag": info["tag"], "url": info["url"],
                                     "name": info.get("name") or "",
+                                    "setup_url": info.get("setup_url") or "",
                                     "checked_at": datetime.now().strftime("%H:%M:%S")}
             if updater.is_newer(info["tag"], updater.parse_version(APP_VERSION)):
                 self.state["update"]["available"] = True
@@ -1859,7 +1861,7 @@ class App:
             updater._log("检查失败: %s" % exc)
 
     def _notify_update(self, info: dict):
-        """弹出新版本提示：是=前往下载；否=本次版本不再提醒。"""
+        """弹出新版本提示：是=自动下载安装；否=本次版本不再提醒。"""
         try:
             if self.settings.get("update_ignore") == info.get("tag"):
                 return
@@ -1869,14 +1871,112 @@ class App:
                 "发现新版本",
                 f"发现新版本 {info.get('tag')}（当前 {APP_VERSION}）\n\n"
                 f"{info.get('name') or ''}\n\n"
-                "是否前往 GitHub 下载最新安装包？")
+                "是否立即下载并安装更新？\n（自动覆盖当前版本，安装完成后自动启动）")
             if go:
-                webbrowser.open(info.get("url") or (updater.RELEASE_URL % info.get("tag")))
+                self._download_update(info)
             else:
                 self.settings["update_ignore"] = info.get("tag")
                 save_settings(self.settings)
         except Exception:
             pass
+
+    def _download_update(self, info: dict):
+        """下载新版本安装包（带进度条），完成后自动退出并安装。"""
+        setup_url = (info or {}).get("setup_url")
+        tag = (info or {}).get("tag", "")
+        if not setup_url:
+            self._open_update_page()  # 拿不到直链时退回打开下载页
+            return
+        try:
+            base = os.environ.get("LOCALAPPDATA") or APPDATA_DIR
+            update_dir = os.path.join(base, "DeepSeekTokenMonitor", "_update")
+            os.makedirs(update_dir, exist_ok=True)
+        except Exception:
+            update_dir = os.path.join(DATA_DIR, "_update")
+        dest = os.path.join(update_dir, "DeepSeekTokenMonitor-Setup-%s.exe" % tag.replace("v", ""))
+        cancel_ev = threading.Event()
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("更新")
+        dlg.configure(bg=C_BG)
+        dlg.resizable(False, False)
+        dlg.attributes("-topmost", True)
+        tk.Label(dlg, text="正在更新到 %s ..." % tag, bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=18, pady=(14, 4))
+        self._upd_lbl = tk.Label(dlg, text="准备下载...", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
+        self._upd_lbl.pack(anchor="w", padx=18, pady=(0, 6))
+        bar = ttk.Progressbar(dlg, length=320, maximum=100)
+        bar.pack(padx=18, pady=(0, 10))
+        btn_cancel = ttk.Button(dlg, text="取消", command=cancel_ev.set)
+        btn_cancel.pack(pady=(0, 12))
+
+        def on_progress(done, total):
+            pct = (done * 100 // total) if total else 0
+            def apply():
+                try:
+                    bar.configure(value=pct)
+                    self._upd_lbl.config(
+                        text="下载中 %d%%（%.1f / %.1f MB）" % (
+                            pct, done / 1048576.0, (total or 0) / 1048576.0))
+                except Exception:
+                    pass
+            self.root.after(0, apply)
+
+        def on_error(msg):
+            def apply():
+                try:
+                    dlg.destroy()
+                except Exception:
+                    pass
+                messagebox.showerror(
+                    "更新失败", "%s\n\n可点击「打开下载页」前往 GitHub 手动下载。" % msg)
+            self.root.after(0, apply)
+
+        def work():
+            try:
+                updater.download(setup_url, dest, on_progress, cancel_ev)
+                if cancel_ev.is_set():
+                    return
+                def ready():
+                    try:
+                        self._upd_lbl.config(text="下载完成，正在安装（程序将自动重启）...")
+                        btn_cancel.config(state="disabled")
+                    except Exception:
+                        pass
+                self.root.after(0, ready)
+                self.root.after(800, lambda: self._install_update(dest))
+            except Exception as exc:
+                try:
+                    os.remove(dest)
+                except Exception:
+                    pass
+                on_error(str(exc))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _install_update(self, setup_path: str):
+        """退出当前程序，由升级脚本静默安装新版本（安装完成后自动启动新版覆盖旧版）。"""
+        try:
+            update_dir = os.path.dirname(setup_path)
+            script = os.path.join(update_dir, "run_update.ps1")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write("$ErrorActionPreference = 'SilentlyContinue'\n")
+                f.write("# 等待旧程序完全退出，释放 exe 占用，再执行静默安装\n")
+                f.write("for ($i = 0; $i -lt 60; $i++) {\n")
+                f.write("  if (-not (Get-Process DeepSeekTokenMonitor -ErrorAction "
+                        "SilentlyContinue)) { break }\n")
+                f.write("  Start-Sleep -Seconds 1\n}\n")
+                f.write("Start-Process -FilePath '%s' "
+                        "-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait\n"
+                        % setup_path)
+                f.write("Remove-Item -Path '%s' -Recurse -Force\n" % update_dir)
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-WindowStyle", "Hidden", "-File", script],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception:
+            pass
+        self.quit()
 
     def _check_update_now(self):
         """设置页按钮：立即检查更新。"""
@@ -1891,10 +1991,10 @@ class App:
             webbrowser.open(url)
 
     def _on_update_click(self):
-        """点击更新状态：有新版本→打开下载页；检查失败/未检查→立即重试。"""
+        """点击更新状态：有新版本→确认后自动下载安装；检查失败/未检查→立即重试。"""
         up = self.state.get("update") or {}
         if up.get("available"):
-            self._open_update_page()
+            self._notify_update(up)
         else:
             self._check_update_now()
 

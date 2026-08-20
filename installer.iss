@@ -1,7 +1,7 @@
 [Setup]
 AppId={{A7E33F1C-4D2B-4C6E-9F8B-2B5A0C77A8D1}
 AppName=水豚噜噜 DeepSeek 用量监控
-AppVersion=1.9.3
+AppVersion=1.9.4
 AppPublisher=CapybaraMonitor
 DefaultDirName={userpf}\DeepSeekTokenMonitor
 DefaultGroupName=水豚噜噜 DeepSeek 用量监控
@@ -37,7 +37,8 @@ Name: "{userstartup}\DeepSeekTokenMonitor"; Filename: "{app}\DeepSeekTokenMonito
 Name: "{userstartup}\DeepSeekTokenMonitor.lnk"; Type: files
 
 [Run]
-Filename: "{app}\DeepSeekTokenMonitor.exe"; Description: "立即启动水豚噜噜监控"; Flags: nowait postinstall skipifsilent
+; 静默安装（自动更新）后同样自动启动新版本，实现"更新完成自动覆盖并重启"
+Filename: "{app}\DeepSeekTokenMonitor.exe"; Description: "立即启动水豚噜噜监控"; Flags: nowait postinstall
 
 [UninstallDelete]
 Name: "{app}"; Type: filesandordirs
