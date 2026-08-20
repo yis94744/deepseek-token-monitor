@@ -51,6 +51,7 @@ def run(config: dict, state: dict, stop_event: threading.Event):
             try:
                 state["balance"] = fetch_balance(config)
                 state["balance_error"] = None
+                storage.save_balance_snapshot(state["balance"])  # 余额每日快照
             except Exception as exc:
                 state["balance"] = None
                 state["balance_error"] = str(exc)

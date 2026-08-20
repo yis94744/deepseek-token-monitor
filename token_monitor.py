@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8.0"
 
 
 # ================= 路径与资源 =================
@@ -528,9 +528,10 @@ class App:
         self._page_refreshers[3] = self._add_summary_page(
             nb, "本月", 3, storage.this_month_stats, storage.this_month_breakdown)
         self._page_refreshers[4] = self._add_daily_page(nb, 4)
-        self._page_refreshers[5] = self._add_model_page(nb, 5)
-        self._page_refreshers[6] = self._add_history_page(nb, 6)
-        self._page_refreshers[7] = self._add_settings_page(nb, 7)
+        self._page_refreshers[5] = self._add_balance_page(nb, 5)
+        self._page_refreshers[6] = self._add_model_page(nb, 6)
+        self._page_refreshers[7] = self._add_history_page(nb, 7)
+        self._page_refreshers[8] = self._add_settings_page(nb, 8)
         nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # ---- 底部状态栏 ----
@@ -793,6 +794,114 @@ class App:
 
         refresh()
         return refresh
+
+    # ---------- 余额统计页 ----------
+    def _add_balance_page(self, nb, index):
+        page = tk.Frame(nb, bg=C_BG)
+        nb.add(page, text="余额统计")
+
+        top = tk.Frame(page, bg=C_BG)
+        top.pack(fill="x", padx=12, pady=8)
+        self.lbl_bal_cur = tk.Label(top, text="", bg=C_BG, fg=C_GREEN,
+                                    font=(FONT, 10, "bold"))
+        self.lbl_bal_cur.grid(row=0, column=0, sticky="w", padx=(0, 16))
+        lbl_days = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
+        lbl_days.grid(row=0, column=1, sticky="w", padx=(0, 16))
+        tk.Label(top, text="余额每日快照：刷新成功自动记录，一天一条", bg=C_BG,
+                 fg=C_SUB, font=(FONT, 8)).grid(row=1, column=0, columnspan=3, sticky="w")
+
+        tk.Label(page, text="近 30 天余额走势", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
+        chart = tk.Canvas(page, height=180, bg=C_CARD, highlightthickness=1,
+                          highlightbackground=C_BROWN_LIGHT)
+        chart.pack(fill="x", padx=12, pady=(0, 8))
+
+        tree = ttk.Treeview(page, columns=("date", "bal", "delta", "upd"), show="headings")
+        for col, text, width in (("date", "日期", 110), ("bal", "余额(元)", 130),
+                                 ("delta", "当日变动", 130), ("upd", "更新时间", 170)):
+            tree.heading(col, text=text)
+            tree.column(col, width=width, anchor="center" if col != "date" else "w")
+        tree.tag_configure("down", foreground=C_RED)
+        tree.tag_configure("up", foreground=C_GREEN)
+        tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        def refresh():
+            rows = storage.balance_history()
+            self._update_balance_cur_label()
+            lbl_days.config(text=f"记录天数  {fmt_int(len(rows))}")
+            self._draw_balance_chart(chart, list(reversed(storage.balance_history(30))))
+            for item in tree.get_children():
+                tree.delete(item)
+            prev = None
+            for r in rows:
+                delta = None
+                if prev is not None:
+                    delta = round(r["balance"] - prev, 4)
+                prev = r["balance"]
+                tags = ()
+                if delta is not None:
+                    tags = ("down",) if delta < 0 else (("up",) if delta > 0 else ())
+                tree.insert("", "end", values=(
+                    r["date"], "%.4f" % r["balance"],
+                    "--" if delta is None else ("%+.4f" % delta),
+                    r["updated_at"][11:16] if len(r["updated_at"]) >= 16 else r["updated_at"]),
+                    tags=tags)
+
+        refresh()
+        return refresh
+
+    def _update_balance_cur_label(self):
+        """刷新余额统计页"当前余额"（设置页/悬浮窗余额变化时同步）。"""
+        try:
+            if not hasattr(self, "lbl_bal_cur"):
+                return
+            if self.state.get("balance") is not None:
+                self.lbl_bal_cur.config(text=f"当前余额  {fmt_money(self.state['balance'])}",
+                                        fg=C_GREEN)
+            elif self.state.get("balance_error"):
+                self.lbl_bal_cur.config(text="当前余额  获取失败", fg=C_RED)
+            else:
+                self.lbl_bal_cur.config(text="当前余额  加载中...", fg=C_SUB)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _draw_balance_chart(c, data):
+        """近 30 天余额走势折线图（data 为按日期升序的余额列表）。"""
+        c.delete("all")
+        w = c.winfo_width() or 400
+        h = c.winfo_height() or 180
+        pad_l, pad_r, pad_t, pad_b = 46, 10, 18, 26
+        plot_w = max(w - pad_l - pad_r, 10)
+        plot_h = max(h - pad_t - pad_b, 10)
+        n = len(data)
+        if n == 0:
+            c.create_text(w / 2, h / 2,
+                          text="暂无余额记录（配置 api_key 并刷新余额后自动记录）",
+                          fill=C_SUB, font=(FONT, 9))
+            return
+        vals = [d["balance"] for d in data]
+        lo, hi = min(vals), max(vals)
+        if hi - lo < 1e-9:
+            hi = lo + 1.0
+        c.create_line(pad_l, h - pad_b, w - pad_r, h - pad_b, fill=C_BROWN_LIGHT)
+        pts = []
+        for i, d in enumerate(data):
+            x = pad_l + plot_w * i / (n - 1) if n > 1 else pad_l + plot_w / 2
+            y = h - pad_b - (d["balance"] - lo) / (hi - lo) * plot_h
+            pts.append((x, y))
+        if len(pts) >= 2:  # 单点时不画线（画布要求至少 4 个坐标）
+            c.create_line([v for pt in pts for v in pt], fill=C_GREEN, width=2,
+                          smooth=True)
+        label_every = max(1, n // 6)
+        for i, (x, y) in enumerate(pts):
+            c.create_oval(x - 2, y - 2, x + 2, y + 2, fill=C_GREEN, outline="")
+            if i % label_every == 0 or i == n - 1:
+                c.create_text(x, y - 9, text=f"{data[i]['balance']:.2f}",
+                              fill=C_BROWN_DARK, font=(MONO, 7))
+            c.create_text(x, h - pad_b + 12, text=data[i]["date"][5:],
+                          fill=C_SUB, font=(FONT, 8))
+        c.create_text(pad_l, 10, anchor="w", text="余额/元", fill=C_SUB, font=(FONT, 8))
 
     # ---------- 模型统计页 ----------
     def _add_model_page(self, nb, index):
@@ -1442,6 +1551,8 @@ class App:
         # 面板余额行跟随余额状态
         if self._float_panel_open:
             self._refresh_float_panel()
+        # 余额统计页"当前余额"跟随刷新
+        self._update_balance_cur_label()
 
         # 2.5) 更新检测状态（标题条横幅 + 设置页标签）
         up = self.state.get("update")
@@ -1564,6 +1675,7 @@ class App:
             try:
                 self.state["balance"] = scheduler.fetch_balance(self.config)
                 self.state["balance_error"] = None
+                storage.save_balance_snapshot(self.state["balance"])  # 余额每日快照
             except Exception as exc:
                 self.state["balance"] = None
                 self.state["balance_error"] = str(exc)

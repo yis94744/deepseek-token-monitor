@@ -5,6 +5,7 @@
 - daily_summaries   : 每天 00:00 自动生成的日结快照
 - weekly_summaries  : 每周一 00:00 自动生成的上周总结快照
 - monthly_summaries : 每月 1 日 00:00 自动生成的上月总结快照
+- balance_history   : 账户余额每日快照（每天一条，刷新成功自动记录）
 """
 import json
 import os
@@ -57,6 +58,12 @@ CREATE TABLE IF NOT EXISTS monthly_summaries (
     completion INTEGER NOT NULL DEFAULT 0,
     cost REAL NOT NULL DEFAULT 0,
     breakdown TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS balance_history (
+    date TEXT PRIMARY KEY,               -- 日期 YYYY-MM-DD（一天一条，后写的覆盖当天）
+    balance REAL NOT NULL DEFAULT 0,     -- 当日余额(元)
+    updated_at TEXT NOT NULL DEFAULT ''  -- 最近更新时间（ISO）
 );
 """
 
@@ -316,6 +323,44 @@ def daily_stats(days: int = None) -> list:
          "completion": r[4], "tokens": r[2] + r[3] + r[4], "cost": round(r[5], 6)}
         for r in rows
     ]
+
+
+def save_balance_snapshot(balance: float):
+    """记录当日账户余额快照（每天一条，同一天后写的覆盖），供余额每日统计使用。"""
+    today = date.today().isoformat()
+    now = datetime.now().isoformat(timespec="seconds")
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute(
+                "INSERT INTO balance_history(date, balance, updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(date) DO UPDATE SET balance=excluded.balance, "
+                "updated_at=excluded.updated_at",
+                (today, float(balance), now))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def balance_history(days: int = None) -> list:
+    """账户余额每日快照，返回按日期倒序的列表：date / balance / updated_at。
+
+    供主界面"余额统计"页使用。
+    """
+    where, args = "", ()
+    if days:
+        start = (date.today() - timedelta(days=days - 1)).isoformat()
+        where = " WHERE date >= ?"
+        args = (start,)
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT date, balance, updated_at FROM balance_history" + where +
+                " ORDER BY date DESC", args).fetchall()
+        finally:
+            conn.close()
+    return [{"date": r[0], "balance": round(r[1], 4), "updated_at": r[2]} for r in rows]
 
 def add_external_request(source_key: str, created_at, model: str, hit: int, miss: int,
                          completion: int, cost: float) -> bool:
