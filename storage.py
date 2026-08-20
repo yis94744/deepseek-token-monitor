@@ -287,6 +287,36 @@ def past_days_stats(days: int = 7) -> list:
         result.append(item)
     return result
 
+
+def daily_stats(days: int = None) -> list:
+    """按天聚合用量（全部历史，或最近 N 天），返回按日期倒序的列表。
+
+    每项：date / requests / cache_hit / cache_miss / completion / tokens / cost。
+    供主界面"每日统计"页使用。
+    """
+    where, args = "", ()
+    if days:
+        start = (date.today() - timedelta(days=days - 1)).isoformat()
+        where = " WHERE date >= ?"
+        args = (start,)
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT date, COUNT(*), "
+                "COALESCE(SUM(prompt_cache_hit_tokens),0), "
+                "COALESCE(SUM(prompt_cache_miss_tokens),0), "
+                "COALESCE(SUM(completion_tokens),0), "
+                "COALESCE(SUM(cost),0) FROM requests" + where +
+                " GROUP BY date ORDER BY date DESC", args).fetchall()
+        finally:
+            conn.close()
+    return [
+        {"date": r[0], "requests": r[1], "cache_hit": r[2], "cache_miss": r[3],
+         "completion": r[4], "tokens": r[2] + r[3] + r[4], "cost": round(r[5], 6)}
+        for r in rows
+    ]
+
 def add_external_request(source_key: str, created_at, model: str, hit: int, miss: int,
                          completion: int, cost: float) -> bool:
     """记录一条来自外部数据源（如 CC Switch）的调用，source_key 用于去重。

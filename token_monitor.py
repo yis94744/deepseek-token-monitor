@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.7.0"
 
 
 # ================= 路径与资源 =================
@@ -527,9 +527,10 @@ class App:
             nb, "本周", 2, storage.this_week_stats, storage.this_week_breakdown)
         self._page_refreshers[3] = self._add_summary_page(
             nb, "本月", 3, storage.this_month_stats, storage.this_month_breakdown)
-        self._page_refreshers[4] = self._add_model_page(nb, 4)
-        self._page_refreshers[5] = self._add_history_page(nb, 5)
-        self._page_refreshers[6] = self._add_settings_page(nb, 6)
+        self._page_refreshers[4] = self._add_daily_page(nb, 4)
+        self._page_refreshers[5] = self._add_model_page(nb, 5)
+        self._page_refreshers[6] = self._add_history_page(nb, 6)
+        self._page_refreshers[7] = self._add_settings_page(nb, 7)
         nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # ---- 底部状态栏 ----
@@ -603,20 +604,25 @@ class App:
 
     def _draw_chart(self):
         """绘制最近 7 天费用柱状图。"""
-        c = self.chart
+        self._draw_cost_bars(self.chart, storage.past_days_stats(7))
+
+    @staticmethod
+    def _draw_cost_bars(c, data):
+        """在画布上绘制每日费用柱状图（仪表盘 7 天 / 每日统计 30 天共用）。"""
         c.delete("all")
-        data = storage.past_days_stats(7)
         w = c.winfo_width() or 400
         h = c.winfo_height() or 200
         pad_l, pad_r, pad_t, pad_b = 46, 10, 18, 30
         plot_w = max(w - pad_l - pad_r, 10)
         plot_h = max(h - pad_t - pad_b, 10)
         maxv = max((d["cost"] for d in data), default=0) or 1.0
-        # 基线
         c.create_line(pad_l, h - pad_b, w - pad_r, h - pad_b, fill=C_BROWN_LIGHT)
         n = len(data)
+        if n <= 0:
+            c.create_text(w / 2, h / 2, text="暂无数据", fill=C_SUB, font=(FONT, 9))
+            return
         slot = plot_w / n
-        bar_w = max(slot * 0.55, 6)
+        bar_w = max(slot * 0.55, 3)
         for i, d in enumerate(data):
             cx = pad_l + slot * i + slot / 2
             bh = d["cost"] / maxv * plot_h
@@ -627,9 +633,10 @@ class App:
             if d["cost"] > 0:
                 c.create_text(cx, y1 - 9, text=f"{d['cost']:.2f}",
                               fill=C_BROWN_DARK, font=(MONO, 7))
-            # 日期 MM-DD
-            c.create_text(cx, h - pad_b + 12, text=d["date"][5:],
-                          fill=C_SUB, font=(FONT, 8))
+            # 日期 MM-DD（柱多时隔一个标一个，避免重叠）
+            if n <= 20 or i % 2 == 0:
+                c.create_text(cx, h - pad_b + 12, text=d["date"][5:],
+                              fill=C_SUB, font=(FONT, 8))
         c.create_text(pad_l, 10, anchor="w", text="元/日", fill=C_SUB, font=(FONT, 8))
 
     def _draw_token_bar(self):
@@ -683,6 +690,57 @@ class App:
             lbl_output.config(text=f"输出  {fmt_int(s['completion'])}")
             lbl_cost.config(text=f"费用  {fmt_money(s['cost'])}")
             self._fill_model_tree(tree, b)
+
+        refresh()
+        return refresh
+
+    # ---------- 每日统计页 ----------
+    def _add_daily_page(self, nb, index):
+        page = tk.Frame(nb, bg=C_BG)
+        nb.add(page, text="每日统计")
+
+        top = tk.Frame(page, bg=C_BG)
+        top.pack(fill="x", padx=12, pady=8)
+        lbl_days = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
+        lbl_days.grid(row=0, column=0, sticky="w", padx=(0, 16))
+        lbl_req = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
+        lbl_req.grid(row=0, column=1, sticky="w", padx=(0, 16))
+        lbl_tok = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
+        lbl_tok.grid(row=0, column=2, sticky="w", padx=(0, 16))
+        lbl_cost = tk.Label(top, text="", bg=C_BG, fg=C_ORANGE_DEEP, font=(FONT, 10, "bold"))
+        lbl_cost.grid(row=0, column=3, sticky="w")
+
+        tk.Label(page, text="近 30 天每日费用", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
+        chart = tk.Canvas(page, height=170, bg=C_CARD, highlightthickness=1,
+                          highlightbackground=C_BROWN_LIGHT)
+        chart.pack(fill="x", padx=12, pady=(0, 8))
+
+        tree = ttk.Treeview(page, columns=("date", "req", "in", "out", "hit", "tok", "cost"),
+                            show="headings")
+        for col, text, width in (("date", "日期", 100), ("req", "请求数", 70),
+                                 ("in", "输入", 90), ("out", "输出", 90),
+                                 ("hit", "命中", 90), ("tok", "Token 合计", 110),
+                                 ("cost", "费用", 100)):
+            tree.heading(col, text=text)
+            tree.column(col, width=width, anchor="center" if col != "date" else "w")
+        tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        def refresh():
+            rows = storage.daily_stats()
+            lbl_days.config(text=f"记录天数  {fmt_int(len(rows))}")
+            lbl_req.config(text=f"累计请求  {fmt_int(sum(r['requests'] for r in rows))}")
+            lbl_tok.config(text=f"累计 Token  {fmt_int(sum(r['tokens'] for r in rows))}")
+            lbl_cost.config(text=f"累计费用  {fmt_money(sum(r['cost'] for r in rows))}")
+            self._draw_cost_bars(chart, storage.past_days_stats(30))
+            for item in tree.get_children():
+                tree.delete(item)
+            for r in rows:
+                tree.insert("", "end", values=(
+                    r["date"], fmt_int(r["requests"]),
+                    fmt_int(r["cache_hit"] + r["cache_miss"]),
+                    fmt_int(r["completion"]), fmt_int(r["cache_hit"]),
+                    fmt_int(r["tokens"]), fmt_money(r["cost"])))
 
         refresh()
         return refresh
