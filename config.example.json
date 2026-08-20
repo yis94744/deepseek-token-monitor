@@ -20,6 +20,7 @@
   },
   "dsh": {
     "enabled": true,
+    "home": "",
     "projcache_path": "",
     "sync_interval_seconds": 5,
     "api_base": "http://127.0.0.1:3080",

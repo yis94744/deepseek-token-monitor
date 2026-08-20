@@ -2,10 +2,12 @@
 """DeepSeek Harness 数据源同步模块。
 
 设计目标：不加任何转发跳数、不增加 API 延迟、不改 Harness 的任何配置。
-DeepSeek Harness（DSH）把每个会话的用量投影缓存写到
-~/.dsh/storages/session_projcache.json：
+DeepSeek Harness（DSH，含 DSH Desktop 桌面版 2.x，两者同源）把每个会话的
+用量投影缓存写到 Harness 数据目录的 storages/session_projcache.json：
   tables.sessions.<会话ID>.rows.tokenUsage.val.totals = {
     uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
+数据目录定位优先级：config.dsh.home > 环境变量 DSH_HOME > ~/.dsh
+（DSH Desktop 启动时会把 DSH_HOME 传给其运行时，本模块同样识别）。
 本模块只读该文件，把各会话的用量增量同步到本软件的 usage.db。
 
 计费口径：与 CC Switch / Kun 同步一致，按 config.json 的人民币单价用
@@ -24,6 +26,14 @@ _LOG = None  # 日志文件路径，由 run() 初始化
 # 模型解析默认参数（可用 config.json 的 dsh 段覆盖）
 _API_BASE_DEFAULT = "http://127.0.0.1:3080"
 _MODEL_TTL_SECONDS = 300
+
+
+def _dsh_home(config: dict) -> str:
+    """定位 Harness 数据目录：config.dsh.home > 环境变量 DSH_HOME > ~/.dsh。"""
+    home = (config.get("dsh") or {}).get("home") or os.environ.get("DSH_HOME")
+    if home:
+        return os.path.expandvars(os.path.expanduser(str(home)))
+    return os.path.join(os.path.expanduser("~"), ".dsh")
 
 
 def _api_call(api_base: str, method: str, payload: dict, timeout: float = 4.0):
@@ -102,11 +112,11 @@ def _resolve_session_models(config: dict, settings: dict, sids: list) -> dict:
 
 
 def _projcache_path(config: dict) -> str:
-    """解析 Harness 用量投影缓存路径，未配置时用默认位置。"""
+    """解析 Harness 用量投影缓存路径，未配置时按 Harness 数据目录默认位置。"""
     path = (config.get("dsh") or {}).get("projcache_path")
     if path:
-        return os.path.expandvars(path)
-    return os.path.join(os.path.expanduser("~"), ".dsh", "storages", "session_projcache.json")
+        return os.path.expandvars(os.path.expanduser(path))
+    return os.path.join(_dsh_home(config), "storages", "session_projcache.json")
 
 
 def _log(text: str):

@@ -65,7 +65,8 @@
 - `models`：各模型输入/输出 token 单价与计费规则
 - `cc_switch`：CC Switch 同步设置（默认开启，读取 `~/.cc-switch/cc-switch.db`）
 - `kun`：Kun 同步设置（默认开启，读取 `~/.kun/data/threads/`，可用 `threads_dir` 覆盖默认目录）
-- `dsh`：DeepSeek Harness 同步设置（默认开启，读取 `~/.dsh/storages/session_projcache.json`，可用 `projcache_path` 覆盖默认路径）
+- `dsh`：DeepSeek Harness 同步设置（默认开启；DSH Desktop 桌面版 2.x 与其同源，自动适配）
+  - 数据目录定位：`home` 配置 > `DSH_HOME` 环境变量 > `~/.dsh`，读取 `storages/session_projcache.json`（可用 `projcache_path` 直接覆盖完整路径）
   - `api_base`：Harness 本地地址（默认 `http://127.0.0.1:3080`），用于解析每个会话使用的模型（pro / flash），保证计费正确
   - `model_refresh_seconds`：模型缓存刷新间隔（默认 300 秒）
   - `models`：可选手动指定 `{会话ID: 模型名}`，优先级高于自动解析
