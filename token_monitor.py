@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.9.2"
+APP_VERSION = "1.9.3"
 
 
 # ================= 路径与资源 =================
@@ -1322,8 +1322,8 @@ class App:
             messagebox.showinfo("已保存", f"余额刷新间隔已改为 {value} 秒，立即生效。")
     # ================= 悬浮窗（360 风格圆形噜噜球） =================
     def _build_float_window(self):
-        IMG = 96     # 噜噜头像尺寸（Pillow 精确缩放），圆圈与图片完全等大
-        TEXT_H = 26  # 圆球上方的悬停金额文字区（透明，仅药丸与文字可见）
+        IMG = 48     # 噜噜头像尺寸（Pillow 精确缩放），圆圈与图片完全等大
+        TEXT_H = 15  # 圆球上方的悬停金额文字区（透明，仅药丸与文字可见）
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
@@ -1355,13 +1355,13 @@ class App:
         # 圆球上方：悬停金额的深棕药丸底 + 亮绿文字。
         # 文字必须画在不透明底色上——透明键色区会把绿字的抗锯齿边缘与洋红键色
         # 混合，导致绿色观感发暗发灰（用户反馈"绿色不对"的根因）。
-        pill_h = 20
-        pill_pts = rounded_rect_points(0, 0, w, pill_h, 10)
+        pill_h = 14
+        pill_pts = rounded_rect_points(0, 0, w, pill_h, 7)
         self.float_pill = cv.create_polygon(
             [c for pt in pill_pts for c in pt], smooth=False,
             fill=C_BROWN_DARK, outline=C_ORANGE, width=1, state="hidden")
         self.float_cost = cv.create_text(w / 2, pill_h / 2, text="", fill=C_GREEN_DEEP,
-                                         font=(MONO, 10, "bold"), state="hidden")
+                                         font=(MONO, 8, "bold"), state="hidden")
 
         # 事件：悬停显示金额 / 单击开关面板 / 拖动 / 双击主界面 / 右键菜单
         cv.bind("<Enter>", self._float_on_enter)
@@ -1535,9 +1535,9 @@ class App:
     def _set_ball_cost(self, text: str):
         """设置药丸内金额文字：字号自动缩小、必要时截断，保证不超出药丸。"""
         cv = self.float_cv
-        max_w = self.float_size - 16  # 药丸内宽，两侧留白防溢出
+        max_w = self.float_size - 8  # 药丸内宽，两侧留白防溢出
         f = tkfont.Font(font=cv.itemcget(self.float_cost, "font"))
-        while f.measure(text) > max_w and f.cget("size") > 7:  # 最小 7pt，保证可读
+        while f.measure(text) > max_w and f.cget("size") > 6:  # 最小 6pt，保证可读
             f.configure(size=f.cget("size") - 1)
             cv.itemconfigure(self.float_cost, font=f)
         while f.measure(text) > max_w and len(text) > 3:
@@ -1579,9 +1579,9 @@ class App:
         text = "+" + fmt_int(total)
         # 连续多个弹窗略微右移错位，避免完全重叠
         self._popups = (self._popups + 1) % 3
-        x = 22 + self._popups * 8
-        item = cv.create_text(x, 30, anchor="w", text=text, fill=C_PINK,
-                              font=(MONO, 10, "bold"))
+        x = 10 + self._popups * 5
+        item = cv.create_text(x, 25, anchor="w", text=text, fill=C_PINK,
+                              font=(MONO, 8, "bold"))
         # 渐隐色阶：纯粉 -> 悬浮窗奶白底色，模拟淡出（12 帧约 0.6 秒）
         steps = 12
         p0 = (0xFF, 0x69, 0xB4)  # 纯粉
