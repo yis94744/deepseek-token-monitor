@@ -33,7 +33,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 
 
 # ================= 路径与资源 =================
@@ -589,6 +589,24 @@ class App:
         self.week_card_value.pack(fill="x", pady=(0, 8))
         self.month_card_value = self._make_small_card(right, "本月至今")
         self.month_card_value.pack(fill="x")
+
+        # 近 7 天每日总金额（首页一眼看到每天花了多少钱，今天高亮）
+        tk.Label(right, text="近 7 天每日总金额", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 9, "bold")).pack(anchor="w", pady=(8, 2))
+        daily_card = tk.Frame(right, bg=C_CARD, highlightbackground=C_GOLD,
+                              highlightthickness=1)
+        daily_card.pack(fill="x", pady=(0, 8))
+        self.daily_rows = []
+        for _ in range(7):
+            row = tk.Frame(daily_card, bg=C_CARD)
+            row.pack(fill="x")
+            d = tk.Label(row, text="--", bg=C_CARD, fg=C_SUB, font=(FONT, 8))
+            d.pack(side="left", padx=(10, 8))
+            c = tk.Label(row, text="--", bg=C_CARD, fg=C_BROWN_DARK,
+                         font=(MONO, 8, "bold"))
+            c.pack(side="right", padx=10)
+            self.daily_rows.append((d, c))
+
         mascot = self._keep_image(_res("mascot.png"), subsample=4)  # 300 -> 75
         tk.Label(right, image=mascot, bg=C_BG).pack(side="bottom", pady=(8, 0))
 
@@ -638,6 +656,27 @@ class App:
                 c.create_text(cx, h - pad_b + 12, text=d["date"][5:],
                               fill=C_SUB, font=(FONT, 8))
         c.create_text(pad_l, 10, anchor="w", text="元/日", fill=C_SUB, font=(FONT, 8))
+
+    def _refresh_daily_list(self):
+        """刷新仪表盘右侧"近 7 天每日总金额"列表（最新在顶，今天高亮）。"""
+        try:
+            data = list(reversed(storage.past_days_stats(7)))
+            for i, (d_lbl, c_lbl) in enumerate(self.daily_rows):
+                if i < len(data):
+                    d = data[i]
+                    d_lbl.config(text=d["date"][5:])
+                    c_lbl.config(text=fmt_money(d["cost"]))
+                    if i == 0:
+                        c_lbl.config(fg=C_ORANGE_DEEP)
+                        d_lbl.config(fg=C_BROWN_DARK, font=(FONT, 8, "bold"))
+                    else:
+                        c_lbl.config(fg=C_BROWN_DARK)
+                        d_lbl.config(fg=C_SUB, font=(FONT, 8))
+                else:
+                    d_lbl.config(text="--")
+                    c_lbl.config(text="--")
+        except Exception:
+            pass
 
     def _draw_token_bar(self):
         """绘制今日 token 构成横向比例条。"""
@@ -724,6 +763,7 @@ class App:
                                  ("cost", "费用", 100)):
             tree.heading(col, text=text)
             tree.column(col, width=width, anchor="center" if col != "date" else "w")
+        tree.tag_configure("total", background="#fdf0d8", foreground=C_ORANGE_DEEP)
         tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         def refresh():
@@ -741,6 +781,15 @@ class App:
                     fmt_int(r["cache_hit"] + r["cache_miss"]),
                     fmt_int(r["completion"]), fmt_int(r["cache_hit"]),
                     fmt_int(r["tokens"]), fmt_money(r["cost"])))
+            # 底部合计行：每日总金额一览
+            if rows:
+                tree.insert("", "end", values=(
+                    "合计", fmt_int(sum(r["requests"] for r in rows)),
+                    fmt_int(sum(r["cache_hit"] + r["cache_miss"] for r in rows)),
+                    fmt_int(sum(r["completion"] for r in rows)),
+                    fmt_int(sum(r["cache_hit"] for r in rows)),
+                    fmt_int(sum(r["tokens"] for r in rows)),
+                    fmt_money(sum(r["cost"] for r in rows))), tags=("total",))
 
         refresh()
         return refresh
@@ -1491,6 +1540,7 @@ class App:
             if self.nb.index("current") == 0:
                 self._draw_chart()
                 self._draw_token_bar()
+                self._refresh_daily_list()
                 self.week_card_value.config(
                     text=f"费用 {fmt_money(storage.this_week_stats()['cost'])}")
                 self.month_card_value.config(
