@@ -2,7 +2,7 @@
 """水豚噜噜 · DeepSeek 用量监控 主程序。
 
 一个完整的水豚主题桌面软件：
-- 主窗口：仪表盘（今日/本周/本月、7 天费用柱状图、各模型统计、历史快照、设置）
+- 主窗口：仪表盘（今日/本周/本月、7 天费用柱状图、各模型统计、按 API Key 统计、历史快照、设置）
 - 悬浮窗：360 风格圆形噜噜球，可拖动、悬停显示消耗金额、单击弹出使用额度面板、右键操作，可在设置里开关
 - 内置本地代理 http://127.0.0.1:8787，自动统计并计费 DeepSeek API 调用
 - 每天 00:00 自动日结、每周一自动周结、每月 1 日自动月结
@@ -34,7 +34,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.9.4"
+APP_VERSION = "1.10.0"
 
 
 # ================= 路径与资源 =================
@@ -531,9 +531,10 @@ class App:
         self._page_refreshers[4] = self._add_daily_page(nb, 4)
         self._page_refreshers[5] = self._add_balance_page(nb, 5)
         self._page_refreshers[6] = self._add_period_page(nb, 6)
-        self._page_refreshers[7] = self._add_model_page(nb, 7)
-        self._page_refreshers[8] = self._add_history_page(nb, 8)
-        self._page_refreshers[9] = self._add_settings_page(nb, 9)
+        self._page_refreshers[7] = self._add_key_page(nb, 7)
+        self._page_refreshers[8] = self._add_model_page(nb, 8)
+        self._page_refreshers[9] = self._add_history_page(nb, 9)
+        self._page_refreshers[10] = self._add_settings_page(nb, 10)
         nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # ---- 底部状态栏 ----
@@ -1022,6 +1023,123 @@ class App:
                 c.create_text(cx, h - pad_b + 12, text=d["date"][5:],
                               fill=C_SUB, font=(FONT, 8))
         c.create_text(pad_l, 10, anchor="w", text="元/日（上=高峰 下=非高峰）",
+                      fill=C_SUB, font=(FONT, 8))
+
+    # ---------- API Key 统计页 ----------
+    def _add_key_page(self, nb, index):
+        page = tk.Frame(nb, bg=C_BG)
+        nb.add(page, text="Key 统计")
+
+        top = tk.Frame(page, bg=C_BG)
+        top.pack(fill="x", padx=12, pady=8)
+        self.lbl_key_today = tk.Label(top, text="", bg=C_BG, fg=C_ORANGE_DEEP,
+                                      font=(FONT, 9))
+        self.lbl_key_today.grid(row=0, column=0, sticky="w", padx=(0, 14))
+        self.lbl_key_month = tk.Label(top, text="", bg=C_BG, fg=C_GREEN, font=(FONT, 9))
+        self.lbl_key_month.grid(row=0, column=1, sticky="w", padx=(0, 14))
+        tk.Label(top, text="仅统计经本地代理 127.0.0.1:8787 的流量（按 Authorization 头识别 Key，"
+                           "只存指纹不存明文）", bg=C_BG, fg=C_SUB,
+                 font=(FONT, 8)).grid(row=0, column=2, sticky="w")
+
+        tk.Label(page, text="近 30 天 各 Key 费用", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
+        chart = tk.Canvas(page, height=180, bg=C_CARD, highlightthickness=1,
+                          highlightbackground=C_BROWN_LIGHT)
+        chart.pack(fill="x", padx=12, pady=(0, 8))
+
+        tk.Label(page, text="本月各 Key", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
+        tree_month = self._make_key_tree(page)
+        tree_month.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        tk.Label(page, text="今日各 Key", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
+        tree_today = self._make_key_tree(page)
+        tree_today.pack(fill="x", padx=12, pady=(0, 12))
+
+        def refresh():
+            today = date.today().isoformat()
+            month_start = date.today().replace(day=1).isoformat()
+            b_today = storage.key_breakdown(today, today)
+            b_month = storage.key_breakdown(month_start, today)
+            self.lbl_key_today.config(
+                text=f"今日代理费用  {fmt_money(sum(r['cost'] for r in b_today))}")
+            self.lbl_key_month.config(
+                text=f"本月代理费用  {fmt_money(sum(r['cost'] for r in b_month))}")
+            self._draw_key_bars(chart, storage.key_daily_stats(30))
+            self._fill_key_tree(tree_month, b_month)
+            self._fill_key_tree(tree_today, b_today)
+
+        refresh()
+        return refresh
+
+    def _make_key_tree(self, parent):
+        tree = ttk.Treeview(parent, columns=("key", "req", "in", "out", "cost"),
+                            show="headings")
+        for col, text, width in (("key", "API Key", 210), ("req", "请求数", 90),
+                                 ("in", "输入token", 110), ("out", "输出token", 110),
+                                 ("cost", "费用", 110)):
+            tree.heading(col, text=text)
+            tree.column(col, width=width, anchor="center" if col != "key" else "w")
+        tree.tag_configure("total", background="#fdf0d8", foreground=C_ORANGE_DEEP)
+        return tree
+
+    @staticmethod
+    def _fill_key_tree(tree, rows):
+        for item in tree.get_children():
+            tree.delete(item)
+        for row in rows:
+            tree.insert("", "end", values=(
+                row["key_hint"], fmt_int(row["requests"]),
+                fmt_int(row["cache_hit"] + row["cache_miss"]),
+                fmt_int(row["completion"]), fmt_money(row["cost"])))
+        if rows:
+            tree.insert("", "end", values=(
+                "合计", fmt_int(sum(r["requests"] for r in rows)),
+                fmt_int(sum(r["cache_hit"] + r["cache_miss"] for r in rows)),
+                fmt_int(sum(r["completion"] for r in rows)),
+                fmt_money(sum(r["cost"] for r in rows))), tags=("total",))
+
+    @staticmethod
+    def _draw_key_bars(c, data):
+        """近 30 天各 Key 费用堆叠柱状图（data 升序；Key 颜色按 30 天累计费用降序分配）。"""
+        c.delete("all")
+        w = c.winfo_width() or 400
+        h = c.winfo_height() or 180
+        pad_l, pad_r, pad_t, pad_b = 46, 10, 18, 26
+        plot_w = max(w - pad_l - pad_r, 10)
+        plot_h = max(h - pad_t - pad_b, 10)
+        n = len(data)
+        if n <= 0:
+            c.create_text(w / 2, h / 2, text="暂无数据", fill=C_SUB, font=(FONT, 9))
+            return
+        totals = {}
+        for d in data:
+            for hint, cost in d["keys"]:
+                totals[hint] = totals.get(hint, 0) + cost
+        palette = ("#b5651d", "#e67e22", "#f1c40f", "#27ae60", "#5b8fc9",
+                   "#9b59b6", "#e74c3c", "#16a085", "#8a6a4d", "#d35400")
+        colors = {hint: palette[i % len(palette)]
+                  for i, hint in enumerate(sorted(totals, key=totals.get, reverse=True))}
+        maxv = max((sum(cost for _, cost in d["keys"]) for d in data), default=0) or 1.0
+        c.create_line(pad_l, h - pad_b, w - pad_r, h - pad_b, fill=C_BROWN_LIGHT)
+        slot = plot_w / n
+        bar_w = max(slot * 0.55, 3)
+        for i, d in enumerate(data):
+            cx = pad_l + slot * i + slot / 2
+            y = h - pad_b
+            for hint, cost in d["keys"]:
+                bh = cost / maxv * plot_h
+                c.create_rectangle(cx - bar_w / 2, y - bh, cx + bar_w / 2, y,
+                                   fill=colors.get(hint, C_BROWN_LIGHT), outline="")
+                y -= bh
+            total = sum(cost for _, cost in d["keys"])
+            if total > 0:
+                c.create_text(cx, y - 8, text=f"{total:.2f}", fill=C_BROWN_DARK,
+                              font=(MONO, 7))
+            if n <= 20 or i % 2 == 0:
+                c.create_text(cx, h - pad_b + 12, text=d["date"][5:],
+                              fill=C_SUB, font=(FONT, 8))
+        c.create_text(pad_l, 10, anchor="w", text="元/日（各 Key 堆叠）",
                       fill=C_SUB, font=(FONT, 8))
 
     # ---------- 模型统计页 ----------

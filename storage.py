@@ -7,6 +7,7 @@
 - monthly_summaries : 每月 1 日 00:00 自动生成的上月总结快照
 - balance_history   : 账户余额每日快照（每天一条，刷新成功自动记录）
 """
+import hashlib
 import json
 import os
 import sqlite3
@@ -28,7 +29,9 @@ CREATE TABLE IF NOT EXISTS requests (
     prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0,  -- 输入(缓存未命中) token
     completion_tokens INTEGER NOT NULL DEFAULT 0,         -- 输出 token
     cost REAL NOT NULL DEFAULT 0,                         -- 本次费用(元)
-    source_key TEXT                                       -- 外部数据源去重键(CC Switch 同步用)
+    source_key TEXT,                                      -- 外部数据源去重键(CC Switch 同步用)
+    api_key_hash TEXT,                                    -- API Key 指纹(sha256 前12位，按 Key 分组用)
+    api_key_hint TEXT                                     -- API Key 显示提示(sk-****末4位，不存明文)
 );
 CREATE INDEX IF NOT EXISTS idx_requests_date ON requests(date);
 
@@ -92,21 +95,48 @@ def init_db(data_dir: str):
             except sqlite3.OperationalError:
                 pass  # 列已存在，忽略
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_source_key ON requests(source_key)")
+            # 旧库迁移：按 API Key 统计（v1.10.0）——补充指纹列，老数据为 NULL（归入"其他来源"）
+            try:
+                conn.execute("ALTER TABLE requests ADD COLUMN api_key_hash TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在，忽略
+            try:
+                conn.execute("ALTER TABLE requests ADD COLUMN api_key_hint TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在，忽略
             conn.commit()
         finally:
             conn.close()
 
 
-def add_request(created_at, model: str, hit: int, miss: int, completion: int, cost: float):
-    """记录一次 API 调用的 token 用量与费用。"""
+def fingerprint_key(key: str):
+    """把 API Key 转成 (指纹, 显示提示)，不保存明文。
+
+    指纹 = sha256(key) 前 12 位十六进制，用于按 Key 分组统计；
+    提示 = sk-****末4位（无 sk- 前缀时用 ****末4位），仅用于界面展示。
+    传入空值返回 (None, None)。
+    """
+    if not key:
+        return None, None
+    key = key.strip()
+    fp = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+    tail = key[-4:]
+    hint = "sk-****" + tail if key.startswith("sk-") else "****" + tail
+    return fp, hint
+
+
+def add_request(created_at, model: str, hit: int, miss: int, completion: int, cost: float,
+                api_key_hash: str = None, api_key_hint: str = None):
+    """记录一次 API 调用的 token 用量与费用（可带 API Key 指纹，供按 Key 统计）。"""
     with _lock:
         conn = _conn()
         try:
             conn.execute(
                 "INSERT INTO requests(created_at, date, model, prompt_cache_hit_tokens, "
-                "prompt_cache_miss_tokens, completion_tokens, cost) VALUES(?,?,?,?,?,?,?)",
+                "prompt_cache_miss_tokens, completion_tokens, cost, api_key_hash, api_key_hint) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (created_at.isoformat(timespec="seconds"), created_at.date().isoformat(),
-                 model, hit, miss, completion, cost),
+                 model, hit, miss, completion, cost, api_key_hash, api_key_hint),
             )
             conn.commit()
         finally:
@@ -412,6 +442,64 @@ def period_stats(days: int = None, config: dict = None) -> list:
         d["off_cost"] = round(d["off_cost"], 6)
         out.append(d)
     return out
+
+def key_breakdown(date_from: str, date_to: str) -> list:
+    """按 API Key 分组统计某日期区间的用量（仅本地代理流量带 Key 指纹）。
+
+    返回按费用倒序的列表：key_hash / key_hint / requests / cache_hit / cache_miss /
+    completion / cost；无 Key 指纹的记录（外部数据源导入）归入 hint 为"其他来源"的一组。
+    """
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT api_key_hash, api_key_hint, COUNT(*), "
+                "COALESCE(SUM(prompt_cache_hit_tokens),0), "
+                "COALESCE(SUM(prompt_cache_miss_tokens),0), "
+                "COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost),0) "
+                "FROM requests WHERE date BETWEEN ? AND ? "
+                "GROUP BY api_key_hash ORDER BY 7 DESC",
+                (date_from, date_to),
+            ).fetchall()
+        finally:
+            conn.close()
+    return [
+        {"key_hash": r[0] or "", "key_hint": r[1] or "其他来源（无 Key）",
+         "requests": r[2], "cache_hit": r[3], "cache_miss": r[4],
+         "completion": r[5], "cost": round(r[6], 6)}
+        for r in rows
+    ]
+
+
+def key_daily_stats(days: int = 30) -> list:
+    """近 N 天（含今天）按日×Key 聚合费用，返回按日期升序的列表。
+
+    每项：date / keys（[(key_hint, cost), ...] 按费用倒序；同一天最多保留前 6 个 Key，
+    其余并入 ("其他", 剩余费用)，避免堆叠图颜色过多）。
+    """
+    start_date = date.today() - timedelta(days=days - 1)
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT date, api_key_hint, COALESCE(SUM(cost),0) FROM requests "
+                "WHERE date >= ? GROUP BY date, api_key_hash ORDER BY date, 3 DESC",
+                (start_date.isoformat(),),
+            ).fetchall()
+        finally:
+            conn.close()
+    by_day = {}
+    for d, hint, cost in rows:
+        by_day.setdefault(d, []).append((hint or "其他来源", round(cost, 6)))
+    result = []
+    for i in range(days):
+        d = (start_date + timedelta(days=i)).isoformat()
+        segments = by_day.get(d, [])
+        if len(segments) > 6:  # 只保留费用最高的 6 个 Key，其余并入"其他"
+            segments = segments[:6] + [("其他", round(sum(c for _, c in segments[6:]), 6))]
+        result.append({"date": d, "keys": segments})
+    return result
+
 
 def add_external_request(source_key: str, created_at, model: str, hit: int, miss: int,
                          completion: int, cost: float) -> bool:

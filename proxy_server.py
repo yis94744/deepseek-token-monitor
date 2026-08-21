@@ -104,6 +104,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     req_json.setdefault("stream_options", {})["include_usage"] = True
                     body = json.dumps(req_json, ensure_ascii=False).encode("utf-8")
 
+        # 3.6) 按 API Key 统计：抓 Authorization / X-API-Key 头，只存指纹不存明文
+        #      （仅本地代理流量带 Key 指纹；CC/Kun/DSH/YQ 等外部导入无 Key）
+        api_key_hash = api_key_hint = None
+        if is_chat:
+            auth = self.headers.get("Authorization") or self.headers.get("X-API-Key") or ""
+            auth = auth.strip()
+            if auth.lower().startswith("bearer "):
+                auth = auth[7:].strip()
+            api_key_hash, api_key_hint = storage.fingerprint_key(auth)
+
         # 4) 转发到上游（超时放宽到 600 秒，兼容长推理场景）
         conn = HTTPSConnection(host, port, timeout=600)
         try:
@@ -143,7 +153,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     price = pricing.get_price(model, config, datetime.now())
                     cost = pricing.calc_cost(usage, price)
                     hit, miss, completion = pricing.calc_usage(usage)
-                    storage.add_request(datetime.now(), model, hit, miss, completion, cost)
+                    storage.add_request(datetime.now(), model, hit, miss, completion, cost,
+                                        api_key_hash, api_key_hint)
 
             # 7) 非流式：统一回写响应
             if not is_stream:
