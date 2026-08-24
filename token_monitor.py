@@ -34,7 +34,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.10.0"
+APP_VERSION = "1.10.1"
 
 
 # ================= 路径与资源 =================
@@ -119,19 +119,68 @@ DEFAULT_CONFIG = {
     },
     "models": {
         "deepseek-v4-flash": {
-            "note": "输入(缓存命中)0.02 / 输入(缓存未命中)1.00 / 输出 2.00 元每百万tokens（官方平峰价）",
-            "cache_hit": 0.02,
-            "cache_miss": 1.0,
-            "output": 2.0,
+            "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.05/未命中1.5/输出4.5；高峰 命中0.10/未命中3.0/输出9.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+            "cache_hit": 0.05,
+            "cache_miss": 1.5,
+            "output": 4.5,
+            "peak": {
+                "cache_hit": 0.10,
+                "cache_miss": 3.0,
+                "output": 9.0
+            },
+            "legacy": {
+                "cache_hit": 0.02,
+                "cache_miss": 1.0,
+                "output": 2.0
+            }
         },
         "deepseek-v4-pro": {
-            "note": "输入(缓存命中)0.025 / 输入(缓存未命中)3.00 / 输出 6.00 元每百万tokens（官方平峰价）",
-            "cache_hit": 0.025,
-            "cache_miss": 3.0,
-            "output": 6.0,
+            "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.15/未命中4.5/输出13.5；高峰 命中0.30/未命中9.0/输出27.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+            "cache_hit": 0.15,
+            "cache_miss": 4.5,
+            "output": 13.5,
+            "peak": {
+                "cache_hit": 0.30,
+                "cache_miss": 9.0,
+                "output": 27.0
+            },
+            "legacy": {
+                "cache_hit": 0.025,
+                "cache_miss": 3.0,
+                "output": 6.0
+            }
         },
     },
 }
+
+
+def _merge_default_config(config: dict) -> bool:
+    """把缺失的默认配置补进现有 config（老配置文件自动升级用）。
+
+    核心：价目表。老格式条目（无 peak/legacy，即 2026-08-17 官网涨价前
+    创建/生成）整体替换为新峰谷价默认值；已含 peak/legacy 的条目视为用户
+    已更新过，仅补缺失子键，绝不覆盖用户自定义价格。
+    返回是否发生了修改（调用方负责写回）。
+    """
+    changed = False
+    default_models = DEFAULT_CONFIG.get("models") or {}
+    models = config.setdefault("models", {})
+    for model, entry in default_models.items():
+        old = models.get(model)
+        if old is None:
+            models[model] = dict(entry)  # 全新模型：用新默认峰谷价
+            changed = True
+        elif not old.get("peak") and not old.get("legacy"):
+            # 老格式价目（无峰谷/legacy）→ 整体替换为新默认价
+            models[model] = dict(entry)
+            changed = True
+        else:
+            # 已是新格式：只补缺失子键，保留用户自定义
+            for key in ("peak", "legacy"):
+                if not old.get(key) and entry.get(key):
+                    old[key] = entry[key]
+                    changed = True
+    return changed
 
 
 def _ensure_runtime_dir():
@@ -301,7 +350,15 @@ class App:
     def _load_config(self) -> dict:
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+            # 老配置文件自动升级（价目表迁移等），有修改则写回
+            try:
+                if _merge_default_config(config):
+                    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                        json.dump(config, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return config
         except Exception as exc:
             root = tk.Tk()
             root.withdraw()
