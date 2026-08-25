@@ -2,9 +2,12 @@
 """计价模块：按 DeepSeek 官网峰谷计费规则计算费用。
 
 - 官网自 2026-08-17 0 时（北京时间）起对 V4 系列采用峰谷计价：
-  高峰时段价格为空闲时段的两倍。
-- 高峰时段：每日 09:00-14:00（本地时间，含 9 点整、不含 14 点整）；
-  可用 config.json 顶层 `peak_hours: {start_hour, end_hour}` 覆盖。
+  高峰时段价格为空闲时段的两倍，空闲时段价格为高峰时段价格的一半。
+- 高峰时段（工作日）：北京时间 9:00-12:00 与 14:00-18:00（含起点、不含终点）；
+  可用 config.json 顶层 `peak_hours` 覆盖，格式支持：
+    新格式 [[9,12],[14,18]]（多段）；旧格式 {"start_hour":9,"end_hour":14}（单段，兼容）
+- 周末规则：2026-08-23 0 时起，周六/周日全天统一按低谷价计费（不再区分峰谷）；
+  生效时刻可用 config.json 顶层 `weekend_offpeak_since: "2026-08-23"` 覆盖（留空则不启用）
 - 2026-08-17 之前的调用按旧平峰价（models.<model>.legacy）结算，
   生效时刻可用 config.json 顶层 `legacy_until: "2026-08-17"` 覆盖。
 - 单价单位：元 / 百万 tokens。config.json 的 models 段可随时修改。
@@ -13,6 +16,7 @@
 from datetime import datetime
 
 _LEGACY_UNTIL_DEFAULT = datetime(2026, 8, 17, 0, 0, 0)  # 官网新价生效时刻
+_WEEKEND_OFFPEAK_SINCE_DEFAULT = datetime(2026, 8, 23, 0, 0, 0)  # 周末低谷价生效时刻
 
 
 def _legacy_until(config) -> datetime:
@@ -26,25 +30,62 @@ def _legacy_until(config) -> datetime:
     return _LEGACY_UNTIL_DEFAULT
 
 
-def _peak_window(config) -> tuple:
-    """高峰时段 [start_hour, end_hour)，默认每日 09:00-14:00。"""
-    peak = (config or {}).get("peak_hours") or {}
+def _weekend_offpeak_since(config):
+    """周末全天低谷价的生效时刻（留空/无法解析则不启用周末规则）。"""
+    raw = (config or {}).get("weekend_offpeak_since")
+    if raw:
+        try:
+            return datetime.strptime(str(raw), "%Y-%m-%d")
+        except Exception:
+            return None
+    return _WEEKEND_OFFPEAK_SINCE_DEFAULT
+
+
+def _peak_window(config) -> list:
+    """高峰时段列表 [(start, end), ...]，默认工作日 9:00-12:00 与 14:00-18:00。
+
+    兼容旧格式 {"start_hour": 9, "end_hour": 14}（单段，向后兼容）。
+    """
+    peak = (config or {}).get("peak_hours")
+    if isinstance(peak, dict):  # 旧格式单段
+        try:
+            return [(int(peak.get("start_hour", 9)), int(peak.get("end_hour", 12)))]
+        except Exception:
+            return []
+    windows = []
     try:
-        start = int(peak.get("start_hour", 9))
-        end = int(peak.get("end_hour", 14))
+        for item in peak or []:
+            windows.append((int(item[0]), int(item[1])))
     except Exception:
-        start, end = 9, 14
-    return start, end
+        windows = []
+    if not windows:
+        return [(9, 12), (14, 18)]
+    return windows
+
+
+def _in_any_window(hour: int, windows: list) -> bool:
+    for start, end in windows:
+        if start <= end:
+            if start <= hour < end:
+                return True
+        else:  # 跨天时段
+            if hour >= start or hour < end:
+                return True
+    return False
 
 
 def is_peak_hour(dt, config=None) -> bool:
-    """某时刻是否处于官网高峰时段（默认每日 09:00-14:00，[start, end)）。"""
+    """某时刻是否处于高峰时段。
+
+    规则（2026-08-17 起）：工作日高峰 9:00-12:00 与 14:00-18:00；
+    2026-08-23 起周末（周六/周日）全天按低谷价，不再区分峰谷。
+    """
     if dt is None:
         return False
-    start, end = _peak_window(config)
-    if start <= end:
-        return start <= dt.hour < end
-    return dt.hour >= start or dt.hour < end  # 跨天时段
+    since = _weekend_offpeak_since(config)
+    if dt.weekday() >= 5 and since is not None and dt >= since:
+        return False  # 周末全天低谷价
+    return _in_any_window(dt.hour, _peak_window(config))
 
 
 def get_price(model: str, config: dict, ts=None) -> dict:

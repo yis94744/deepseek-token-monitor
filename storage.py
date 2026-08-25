@@ -400,7 +400,8 @@ def period_stats(days: int = None, config: dict = None) -> list:
 
     每项：date / peak_requests / peak_tokens / peak_cost /
           off_requests / off_tokens / off_cost
-    时段判定复用计价规则（默认每日 09:00-14:00 高峰，可配置 peak_hours 覆盖），
+    时段判定复用计价规则（默认工作日高峰 9:00-12:00 与 14:00-18:00，
+    周末全天低谷价，可配置 peak_hours / weekend_offpeak_since 覆盖），
     按每条请求的 created_at 时刻归属。
     """
     where, args = "", ()
@@ -442,6 +443,36 @@ def period_stats(days: int = None, config: dict = None) -> list:
         d["off_cost"] = round(d["off_cost"], 6)
         out.append(d)
     return out
+
+
+def rebill_all(config: dict) -> int:
+    """按当前计价规则重算全部历史记录的费用（覆盖原 cost），返回改写行数。
+
+    用于官网调价/修正高峰时段后对账：每条记录按 created_at 重新取价并重算。
+    """
+    fixed = 0
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, model, created_at, prompt_cache_hit_tokens, "
+                "prompt_cache_miss_tokens, completion_tokens FROM requests").fetchall()
+            for rid, model, created_at, hit, miss, comp in rows:
+                try:
+                    dt = datetime.fromisoformat(created_at)
+                except Exception:
+                    continue
+                price = pricing.get_price(model, config, dt)
+                cost = pricing.calc_cost(
+                    {"prompt_cache_hit_tokens": hit,
+                     "prompt_cache_miss_tokens": miss,
+                     "completion_tokens": comp}, price)
+                conn.execute("UPDATE requests SET cost=? WHERE id=?", (cost, rid))
+                fixed += 1
+            conn.commit()
+        finally:
+            conn.close()
+    return fixed
 
 def key_breakdown(date_from: str, date_to: str) -> list:
     """按 API Key 分组统计某日期区间的用量（仅本地代理流量带 Key 指纹）。

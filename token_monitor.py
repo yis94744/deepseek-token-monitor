@@ -34,7 +34,7 @@ import updater
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.10.1"
+APP_VERSION = "1.10.2"
 
 
 # ================= 路径与资源 =================
@@ -92,6 +92,9 @@ DEFAULT_CONFIG = {
     "upstream_base_url": "https://api.deepseek.com",
     "balance_refresh_seconds": 300,
     "unknown_model_fallback": "deepseek-v4-flash",
+    "peak_hours": [[9, 12], [14, 18]],
+    "weekend_offpeak_since": "2026-08-23",
+    "legacy_until": "2026-08-17",
     "cc_switch": {
         "enabled": True,
         "db_path": "",
@@ -180,6 +183,18 @@ def _merge_default_config(config: dict) -> bool:
                 if not old.get(key) and entry.get(key):
                     old[key] = entry[key]
                     changed = True
+    # 高峰窗口迁移：旧格式单段 {start_hour,end_hour}（错误窗口 9-14）→ 官方双段 [[9,12],[14,18]]
+    ph = config.get("peak_hours")
+    if isinstance(ph, dict):
+        config["peak_hours"] = list(DEFAULT_CONFIG.get("peak_hours") or [[9, 12], [14, 18]])
+        changed = True
+    elif not ph:
+        config["peak_hours"] = list(DEFAULT_CONFIG.get("peak_hours") or [[9, 12], [14, 18]])
+        changed = True
+    # 周末低谷规则补齐
+    if "weekend_offpeak_since" not in config:
+        config["weekend_offpeak_since"] = DEFAULT_CONFIG.get("weekend_offpeak_since")
+        changed = True
     return changed
 
 
@@ -986,7 +1001,7 @@ class App:
         self.lbl_off_month = tk.Label(top, text="", bg=C_BG, fg=C_GREEN, font=(FONT, 9))
         self.lbl_off_month.grid(row=0, column=3, sticky="w")
 
-        tk.Label(page, text="近 30 天 高峰/非高峰 费用（高峰时段默认每日 09:00-14:00，价格翻倍）",
+        tk.Label(page, text="近 30 天 高峰/非高峰 费用（工作日高峰 9:00-12:00 与 14:00-18:00，周末全天低谷价）",
                  bg=C_BG, fg=C_BROWN_DARK,
                  font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
         chart = tk.Canvas(page, height=180, bg=C_CARD, highlightthickness=1,
@@ -1364,6 +1379,8 @@ class App:
                                      cursor="hand2")
         self.lbl_updcheck.pack(anchor="w", pady=(0, 6))
         self.lbl_updcheck.bind("<Button-1>", lambda e: self._on_update_click())
+        ttk.Button(left, text="按最新峰谷价重算历史费用", command=self._rebill_all).pack(
+            anchor="w", fill="x", pady=2)
         ttk.Button(left, text="打开配置文件 config.json",
                    command=lambda: os.startfile(CONFIG_PATH)).pack(anchor="w", fill="x", pady=2)
         ttk.Button(left, text="打开数据文件夹",
@@ -2157,6 +2174,25 @@ class App:
         """设置页按钮：立即检查更新。"""
         self.state["update"] = {"checked_at": "检查中..."}
         threading.Thread(target=self._run_update_check, daemon=True).start()
+
+    def _rebill_all(self):
+        """设置页按钮：按当前峰谷价重算全部历史费用（对账用）。"""
+        if not messagebox.askyesno(
+                "重算历史费用",
+                "将按 config.json 当前价目与峰谷规则（工作日高峰 9:00-12:00 与 "
+                "14:00-18:00、周末全天低谷价）重新计算全部历史记录的费用，"
+                "覆盖原有费用。\n\n是否继续？"):
+            return
+
+        def work():
+            try:
+                n = storage.rebill_all(self.config)
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "重算完成", f"已按最新峰谷价重算 {fmt_int(n)} 条记录的费用。"))
+            except Exception as exc:
+                self.root.after(0, lambda: messagebox.showerror("重算失败", str(exc)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _open_update_page(self):
         """打开最新 release 下载页。"""

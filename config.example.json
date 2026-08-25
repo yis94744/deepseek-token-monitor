@@ -5,10 +5,11 @@
   "upstream_base_url": "https://api.deepseek.com",
   "balance_refresh_seconds": 300,
   "unknown_model_fallback": "deepseek-v4-flash",
-  "peak_hours": {
-    "start_hour": 9,
-    "end_hour": 14
-  },
+  "peak_hours": [
+    [9, 12],
+    [14, 18]
+  ],
+  "weekend_offpeak_since": "2026-08-23",
   "legacy_until": "2026-08-17",
   "cc_switch": {
     "enabled": true,
