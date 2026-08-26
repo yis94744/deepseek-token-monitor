@@ -25,16 +25,18 @@ from datetime import date, datetime
 from tkinter import messagebox, ttk
 
 import cc_switch_sync
+import codebuddy_sync
 import dsh_sync
 import kun_sync
 import proxy_server
 import scheduler
 import storage
 import updater
+import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.10.2"
+APP_VERSION = "1.11.0"
 
 
 # ================= 路径与资源 =================
@@ -115,6 +117,17 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "projcache_path": "",
         "sync_interval_seconds": 5,
+    },
+    "codebuddy": {
+        "enabled": True,
+        "logs_dir": "",
+        "sync_interval_seconds": 10,
+        "model": "",
+    },
+    "workbuddy": {
+        "enabled": True,
+        "projects_dir": "",
+        "sync_interval_seconds": 10,
     },
     "update_check": {
         "enabled": True,
@@ -346,6 +359,14 @@ class App:
         threading.Thread(target=yq_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
+        # CodeBuddy 数据同步线程：只读 CodeBuddy 日志中的 Agent 回合用量
+        threading.Thread(target=codebuddy_sync.run,
+                         args=(self.config, self.settings, self.state, self.stop_event),
+                         daemon=True).start()
+        # WorkBuddy 数据同步线程：只读 WorkBuddy 会话 jsonl 的调用用量
+        threading.Thread(target=workbuddy_sync.run,
+                         args=(self.config, self.settings, self.state, self.stop_event),
+                         daemon=True).start()
 
         # 主窗口与悬浮窗
         self.root = tk.Tk()
@@ -426,6 +447,16 @@ class App:
     def _toggle_yq(self):
         """设置页：开关 YQ Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
         self.config.setdefault("yq", {})["enabled"] = self.yq_var.get()
+        self._save_config()
+
+    def _toggle_codebuddy(self):
+        """设置页：开关 CodeBuddy 同步（同步线程常驻，读到配置变化后自动生效）。"""
+        self.config.setdefault("codebuddy", {})["enabled"] = self.codebuddy_var.get()
+        self._save_config()
+
+    def _toggle_workbuddy(self):
+        """设置页：开关 WorkBuddy 同步（同步线程常驻，读到配置变化后自动生效）。"""
+        self.config.setdefault("workbuddy", {})["enabled"] = self.workbuddy_var.get()
         self._save_config()
 
     def _init_style(self):
@@ -1351,7 +1382,15 @@ class App:
         self.yq_var = tk.BooleanVar(
             value=bool((self.config.get("yq") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="YQ Harness 同步", variable=self.yq_var,
-                        command=self._toggle_yq).pack(anchor="w", pady=(0, 10))
+                        command=self._toggle_yq).pack(anchor="w", pady=(0, 4))
+        self.codebuddy_var = tk.BooleanVar(
+            value=bool((self.config.get("codebuddy") or {}).get("enabled", True)))
+        ttk.Checkbutton(left, text="CodeBuddy 同步", variable=self.codebuddy_var,
+                        command=self._toggle_codebuddy).pack(anchor="w", pady=(0, 4))
+        self.workbuddy_var = tk.BooleanVar(
+            value=bool((self.config.get("workbuddy") or {}).get("enabled", True)))
+        ttk.Checkbutton(left, text="WorkBuddy 同步", variable=self.workbuddy_var,
+                        command=self._toggle_workbuddy).pack(anchor="w", pady=(0, 10))
 
         # 代理状态
         self.lbl_setting_proxy = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
@@ -1367,7 +1406,13 @@ class App:
         self.lbl_dshsync.pack(anchor="w", pady=(0, 6))
         # YQ Harness 数据同步状态
         self.lbl_yqsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_yqsync.pack(anchor="w", pady=(0, 12))
+        self.lbl_yqsync.pack(anchor="w", pady=(0, 6))
+        # CodeBuddy 数据同步状态
+        self.lbl_codebuddysync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
+        self.lbl_codebuddysync.pack(anchor="w", pady=(0, 6))
+        # WorkBuddy 数据同步状态
+        self.lbl_workbuddysync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
+        self.lbl_workbuddysync.pack(anchor="w", pady=(0, 12))
 
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
@@ -1975,6 +2020,32 @@ class App:
                 self.lbl_yqsync.config(
                     text=f"YQ Harness 同步：运行中 · 累计导入 {fmt_int(yq.get('total_added', 0))} 条"
                          f" · {yq.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.8) CodeBuddy 数据同步状态
+        if hasattr(self, "lbl_codebuddysync"):
+            cb = self.state.get("codebuddy_sync")
+            if not cb or not cb.get("enabled"):
+                self.lbl_codebuddysync.config(text="CodeBuddy 同步：未启用", fg=C_SUB)
+            elif cb.get("error"):
+                self.lbl_codebuddysync.config(
+                    text="CodeBuddy 同步：读取失败 " + str(cb["error"]), fg=C_RED)
+            else:
+                self.lbl_codebuddysync.config(
+                    text=f"CodeBuddy 同步：运行中 · 累计导入 {fmt_int(cb.get('total_added', 0))} 条"
+                         f" · {cb.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.9) WorkBuddy 数据同步状态
+        if hasattr(self, "lbl_workbuddysync"):
+            wb = self.state.get("workbuddy_sync")
+            if not wb or not wb.get("enabled"):
+                self.lbl_workbuddysync.config(text="WorkBuddy 同步：未启用", fg=C_SUB)
+            elif wb.get("error"):
+                self.lbl_workbuddysync.config(
+                    text="WorkBuddy 同步：读取失败 " + str(wb["error"]), fg=C_RED)
+            else:
+                self.lbl_workbuddysync.config(
+                    text=f"WorkBuddy 同步：运行中 · 累计导入 {fmt_int(wb.get('total_added', 0))} 条"
+                         f" · {wb.get('last_time', '')}", fg=C_GREEN)
 
         # 5) 日期与仪表盘图表
         self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))

@@ -40,6 +40,17 @@
       "session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx": "deepseek-v4-pro"
     }
   },
+  "codebuddy": {
+    "enabled": true,
+    "logs_dir": "",
+    "sync_interval_seconds": 10,
+    "model": ""
+  },
+  "workbuddy": {
+    "enabled": true,
+    "projects_dir": "",
+    "sync_interval_seconds": 10
+  },
   "update_check": {
     "enabled": true,
     "interval_hours": 6
