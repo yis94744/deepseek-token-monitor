@@ -35,8 +35,6 @@ def fetch_balance(config: dict) -> float:
 
 def run(config: dict, state: dict, stop_event: threading.Event):
     """后台线程入口：周期刷新余额；检测跨天/跨周/跨月并自动写总结快照。"""
-    interval = max(30, int(config.get("balance_refresh_seconds", 300)))
-
     last_balance_ts = None
     last_day = date.today()
     last_week = storage.week_range_start()
@@ -45,7 +43,8 @@ def run(config: dict, state: dict, stop_event: threading.Event):
     while not stop_event.is_set():
         now = datetime.now()
 
-        # 1) 余额定时刷新
+        # 1) 余额定时刷新（每轮重新读配置：设置页修改间隔后立即生效，无需重启）
+        interval = max(30, int(config.get("balance_refresh_seconds", 300)))
         if last_balance_ts is None or (now - last_balance_ts).total_seconds() >= interval:
             last_balance_ts = now
             try:

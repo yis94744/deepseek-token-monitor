@@ -90,7 +90,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         path = self.path
 
         # 3.5) 聊天接口预处理：解析请求体，给流式请求自动补 include_usage
-        is_chat = path.endswith("/chat/completions")
+        #      （先去掉查询串再匹配路径，兼容 /chat/completions?api-version=... 等）
+        is_chat = urlsplit(path).path.endswith("/chat/completions")
         is_stream = False
         if is_chat and body:
             try:

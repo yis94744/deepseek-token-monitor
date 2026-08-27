@@ -9,3 +9,7 @@ __pycache__/
 # 构建产物与本地说明
 *.exe
 README.txt
+# 本会话/本机的辅助文件
+CONTEXT_SUMMARY.md
+_err.txt
+.tmp/

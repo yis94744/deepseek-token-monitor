@@ -104,7 +104,9 @@ def sync_once(config: dict, settings: dict) -> int:
     fallback = config.get("unknown_model_fallback", "deepseek-v4-flash")
 
     pending = []  # (trace_id, dt, model, hit, miss, comp)
+    seen_paths = set()  # 本轮见到的文件（用于清理已删除文件的游标，防 settings 膨胀）
     for path in sorted(_iter_log_files(logs_dir)):
+        seen_paths.add(path)
         try:
             size = os.path.getsize(path)
         except OSError:
@@ -118,9 +120,17 @@ def sync_once(config: dict, settings: dict) -> int:
             continue
         last_model = None
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            # 二进制逐行读取，只消费以 \n 结尾的完整行：文件尾不完整的半行
+            # （CodeBuddy 正在写入）留到下一轮。此前文本模式会把半行消费掉，
+            # 偏移越过它之后剩余字节永远拼不成整行，该条用量记录就永久丢失。
+            with open(path, "rb") as f:
                 f.seek(offset)
-                for line in f:
+                consumed = offset
+                for raw in f:
+                    if not raw.endswith(b"\n"):
+                        break  # 半行：等下轮写入方补全后再读
+                    consumed += len(raw)
+                    line = raw.decode("utf-8", errors="replace")
                     # 启发式记录最近出现的具体模型名（供本文件内 usage 行归属）
                     mm = _MODEL_PAT.search(line)
                     if mm:
@@ -157,11 +167,14 @@ def sync_once(config: dict, settings: dict) -> int:
                     # 把启发式提取的模型写入缓存，跨文件/跨轮复用
                     if last_model and cached_model != last_model:
                         cached_model = last_model
-                offset = f.tell()  # 本次读到的新偏移（文件追加时从上次处继续）
+                offset = consumed  # 新偏移只推进到最后一个完整行（文件追加时从上次处继续）
         except Exception as exc:
             _log("读取失败 %s: %s" % (path, exc))
         cursor[path] = {"offset": offset, "size": size}
 
+    # 清理已被删除的日志文件的游标，防止 settings.json 无限膨胀
+    for gone in [p for p in cursor if p not in seen_paths]:
+        del cursor[gone]
     settings["codebuddy_cursor"] = cursor
     if cached_model:
         settings["codebuddy_model"] = cached_model

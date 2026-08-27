@@ -99,7 +99,9 @@ def sync_once(config: dict, settings: dict) -> int:
         cursor = {}
 
     pending = []  # (session, msg_id, dt, model, hit, miss, comp)
+    seen_paths = set()  # 本轮见到的文件（用于清理已删除文件的游标，防 settings 膨胀）
     for path in sorted(_iter_session_files(projects_dir)):
+        seen_paths.add(path)
         try:
             size = os.path.getsize(path)
         except OSError:
@@ -112,16 +114,22 @@ def sync_once(config: dict, settings: dict) -> int:
         if offset == size:
             continue
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            # 二进制逐行读取，只消费以 \n 结尾的完整行：文件尾不完整的半行
+            # （WorkBuddy 正在写入）留到下一轮，避免半行被消费后该条记录永久丢失。
+            with open(path, "rb") as f:
                 f.seek(offset)
-                for line in f:
-                    line = line.strip()
+                consumed = offset
+                for raw in f:
+                    if not raw.endswith(b"\n"):
+                        break  # 半行：等下轮写入方补全后再读
+                    consumed += len(raw)
+                    line = raw.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue
                     try:
                         d = json.loads(line)
                     except Exception:
-                        continue  # 半行（WorkBuddy 正在写入），等下次追加后重读
+                        continue  # 解析失败（异常行）：跳过，不影响其余记录
                     usage = _parse_usage(d)
                     if not usage:
                         continue
@@ -134,11 +142,14 @@ def sync_once(config: dict, settings: dict) -> int:
                     model = pd.get("model") or config.get("unknown_model_fallback",
                                                           "deepseek-v4-flash")
                     pending.append((session, msg_id, dt, str(model), usage[0], usage[1], usage[2]))
-                offset = f.tell()  # 本次读到的新偏移（文件追加时从上次处继续）
+                offset = consumed  # 新偏移只推进到最后一个完整行（文件追加时从上次处继续）
         except Exception as exc:
             _log("读取失败 %s: %s" % (path, exc))
         cursor[path] = {"offset": offset, "size": size}
 
+    # 清理已被删除的会话文件的游标，防止 settings.json 无限膨胀
+    for gone in [p for p in cursor if p not in seen_paths]:
+        del cursor[gone]
     settings["workbuddy_cursor"] = cursor
     if not pending:
         return 0

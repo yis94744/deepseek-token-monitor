@@ -2,6 +2,7 @@
   "api_key": "",
   "proxy_host": "127.0.0.1",
   "proxy_port": 8787,
+  "proxy_enabled": true,
   "upstream_base_url": "https://api.deepseek.com",
   "balance_refresh_seconds": 300,
   "unknown_model_fallback": "deepseek-v4-flash",

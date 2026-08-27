@@ -21,7 +21,7 @@ import threading
 import tkinter as tk
 import tkinter.font as tkfont
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from tkinter import messagebox, ttk
 
 import cc_switch_sync
@@ -34,7 +34,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.11.0"
+APP_VERSION = "1.11.1"
 
 
 # ================= 路径与资源 =================
@@ -595,16 +595,17 @@ class App:
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self.nb = nb
         self._build_dashboard_page(nb)     # 0 仪表盘（由定时器实时刷新）
-        today = date.today()
+        # 注意：日期必须在每次刷新时重新计算（不能用启动时的 today 快照），
+        # 否则程序长期运行跨过零点后，今日/本周/本月页会一直按旧日期过滤数据。
         self._page_refreshers[1] = self._add_summary_page(
             nb, "今日", 1, storage.today_stats, storage.today_breakdown,
-            lambda: storage.source_breakdown(today, today))
+            lambda: storage.source_breakdown(date.today(), date.today()))
         self._page_refreshers[2] = self._add_summary_page(
             nb, "本周", 2, storage.this_week_stats, storage.this_week_breakdown,
-            lambda: storage.source_breakdown(storage.week_range_start(), today))
+            lambda: storage.source_breakdown(storage.week_range_start(), date.today()))
         self._page_refreshers[3] = self._add_summary_page(
             nb, "本月", 3, storage.this_month_stats, storage.this_month_breakdown,
-            lambda: storage.source_breakdown(today.replace(day=1), today))
+            lambda: storage.source_breakdown(date.today().replace(day=1), date.today()))
         self._page_refreshers[4] = self._add_daily_page(nb, 4)
         self._page_refreshers[5] = self._add_balance_page(nb, 5)
         self._page_refreshers[6] = self._add_period_page(nb, 6)
@@ -928,10 +929,10 @@ class App:
         tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         def refresh():
-            rows = storage.balance_history()
+            rows = storage.balance_history()  # 一次取全量（倒序），图表复用前 30 天切片
             self._update_balance_cur_label()
             lbl_days.config(text=f"记录天数  {fmt_int(len(rows))}")
-            self._draw_balance_chart(chart, list(reversed(storage.balance_history(30))))
+            self._draw_balance_chart(chart, list(reversed(rows[:30])))
             for item in tree.get_children():
                 tree.delete(item)
             for i, r in enumerate(rows):
@@ -1048,7 +1049,7 @@ class App:
         tree.pack(fill="both", expand=True, padx=12, pady=(8, 12))
 
         def refresh():
-            rows = storage.period_stats(config=self.config)
+            rows = storage.period_stats(config=self.config)  # 全量（倒序），图表复用近 30 天切片
             today = date.today().isoformat()
             month = date.today().strftime("%Y-%m")
             p_today = next((r for r in rows if r["date"] == today), None)
@@ -1063,7 +1064,10 @@ class App:
                 text=f"今日非高峰  {fmt_money(p_today['off_cost'] if p_today else 0)}")
             self.lbl_peak_month.config(text=f"本月高峰  {fmt_money(msum('peak_cost'))}")
             self.lbl_off_month.config(text=f"本月非高峰  {fmt_money(msum('off_cost'))}")
-            self._draw_period_bars(chart, list(reversed(storage.period_stats(30, self.config))))
+            # 图表只需升序的最近 30 天：直接切片，避免对全表再做一次分时段统计
+            start30 = (date.today() - timedelta(days=29)).isoformat()
+            chart_rows = [r for r in rows if r["date"] >= start30]
+            self._draw_period_bars(chart, list(reversed(chart_rows)))
             for item in tree.get_children():
                 tree.delete(item)
             for r in rows:
@@ -2297,7 +2301,11 @@ class App:
             except Exception:
                 pass
             self._tray_icon = None
-        self._float_save_pos()
+        try:
+            self._float_save_pos()  # 保存悬浮球位置（同时把同步游标等一并写入 settings.json）
+        except Exception:
+            pass
+        save_settings(self.settings)  # 显式持久化运行设置（含各数据源同步游标）
         self.stop_event.set()
         self.root.destroy()
 
