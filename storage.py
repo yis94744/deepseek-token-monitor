@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS requests (
     cost REAL NOT NULL DEFAULT 0,                         -- 本次费用(元)
     source_key TEXT,                                      -- 外部数据源去重键(CC Switch 同步用)
     api_key_hash TEXT,                                    -- API Key 指纹(sha256 前12位，按 Key 分组用)
-    api_key_hint TEXT                                     -- API Key 显示提示(sk-****末4位，不存明文)
+    api_key_hint TEXT,                                    -- API Key 显示提示(sk-****末4位，不存明文)
+    imported_at TEXT                                      -- 入库时间(ISO，悬浮窗+N弹窗用实时新增判断)
 );
 CREATE INDEX IF NOT EXISTS idx_requests_date ON requests(date);
 
@@ -112,6 +113,12 @@ def init_db(data_dir: str):
                     conn.execute("ALTER TABLE balance_history ADD COLUMN %s REAL NOT NULL DEFAULT 0" % col)
                 except sqlite3.OperationalError:
                     pass  # 列已存在，忽略
+            # 旧库迁移（v1.11.0）：requests 增加入库时间列（悬浮窗+N弹窗用），老数据回填为 created_at
+            try:
+                conn.execute("ALTER TABLE requests ADD COLUMN imported_at TEXT")
+                conn.execute("UPDATE requests SET imported_at = created_at WHERE imported_at IS NULL")
+            except sqlite3.OperationalError:
+                pass  # 列已存在，忽略
             conn.commit()
         finally:
             conn.close()
@@ -141,10 +148,11 @@ def add_request(created_at, model: str, hit: int, miss: int, completion: int, co
         try:
             conn.execute(
                 "INSERT INTO requests(created_at, date, model, prompt_cache_hit_tokens, "
-                "prompt_cache_miss_tokens, completion_tokens, cost, api_key_hash, api_key_hint) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
+                "prompt_cache_miss_tokens, completion_tokens, cost, api_key_hash, api_key_hint, "
+                "imported_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (created_at.isoformat(timespec="seconds"), created_at.date().isoformat(),
-                 model, hit, miss, completion, cost, api_key_hash, api_key_hint),
+                 model, hit, miss, completion, cost, api_key_hash, api_key_hint,
+                 datetime.now().isoformat(timespec="seconds")),
             )
             conn.commit()
         finally:
@@ -614,10 +622,11 @@ def add_external_request(source_key: str, created_at, model: str, hit: int, miss
         try:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO requests(created_at, date, model, prompt_cache_hit_tokens, "
-                "prompt_cache_miss_tokens, completion_tokens, cost, source_key) "
-                "VALUES(?,?,?,?,?,?,?,?)",
+                "prompt_cache_miss_tokens, completion_tokens, cost, source_key, imported_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (created_at.isoformat(timespec="seconds"), created_at.date().isoformat(),
-                 model, hit, miss, completion, cost, source_key),
+                 model, hit, miss, completion, cost, source_key,
+                 datetime.now().isoformat(timespec="seconds")),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -638,9 +647,10 @@ def add_external_requests(rows: list) -> int:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO requests(created_at, date, model, "
                     "prompt_cache_hit_tokens, prompt_cache_miss_tokens, completion_tokens, "
-                    "cost, source_key) VALUES(?,?,?,?,?,?,?,?)",
+                    "cost, source_key, imported_at) VALUES(?,?,?,?,?,?,?,?,?)",
                     (created_at.isoformat(timespec="seconds"), created_at.date().isoformat(),
-                     model, hit, miss, completion, cost, source_key),
+                     model, hit, miss, completion, cost, source_key,
+                     datetime.now().isoformat(timespec="seconds")),
                 )
                 added += cur.rowcount
             conn.commit()
@@ -689,9 +699,14 @@ def max_request_id() -> int:
 
 
 def new_requests_since(min_id: int, seconds: int = 8) -> list:
-    """返回 id>min_id 且发生在最近 seconds 秒内的 (id, token总量) 列表。
+    """返回 id>min_id 且最近 seconds 秒内入库的 (id, token总量) 列表。
 
-    供悬浮窗弹出 "+N" 动效使用：只取近期实时新增，避免首次同步历史时刷屏。
+    供悬浮窗 "+N" 动效使用：以"入库时间(imported_at)"为准，而非请求时间
+    (created_at)。因为 CodeBuddy/WorkBuddy 等外部来源的 created_at 是原始
+    调用时间（可能是几小时甚至几天前），刚同步入库时若按 created_at 过滤
+    会被 8 秒窗口误杀，导致不弹窗。用 imported_at 能准确识别"此刻刚入库"
+    的新增，无论其原始调用发生在何时。同时用 8 秒窗口避免启动时补同步
+    历史刷屏。
     """
     since = (datetime.now() - timedelta(seconds=seconds)).isoformat(timespec="seconds")
     with _lock:
@@ -699,7 +714,7 @@ def new_requests_since(min_id: int, seconds: int = 8) -> list:
         try:
             rows = conn.execute(
                 "SELECT id, prompt_cache_hit_tokens + prompt_cache_miss_tokens + completion_tokens "
-                "FROM requests WHERE id > ? AND created_at >= ? ORDER BY id",
+                "FROM requests WHERE id > ? AND imported_at >= ? ORDER BY id",
                 (min_id, since),
             ).fetchall()
         finally:
