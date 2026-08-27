@@ -1814,11 +1814,14 @@ class App:
         # 连续多个弹窗略微右移错位，避免完全重叠
         self._popups = (self._popups + 1) % 3
         x = 10 + self._popups * 5
-        item = cv.create_text(x, 25, anchor="w", text=text, fill=C_PINK,
-                              font=(MONO, 8, "bold"))
-        # 渐隐色阶：纯粉 -> 悬浮窗奶白底色，模拟淡出（12 帧约 0.6 秒）
+        # 浅蓝主文字 + 深蓝描边（错位 1px），在奶白底上数字清晰醒目
+        outline = cv.create_text(x + 1, 26, anchor="w", text=text, fill="#1d5f8a",
+                                 font=(MONO, 9, "bold"))
+        item = cv.create_text(x, 25, anchor="w", text=text, fill="#4db6ff",
+                              font=(MONO, 9, "bold"))
+        # 渐隐色阶：浅蓝 -> 悬浮窗奶白底色，模拟淡出（12 帧约 0.6 秒）
         steps = 12
-        p0 = (0xFF, 0x69, 0xB4)  # 纯粉
+        p0 = (0x4D, 0xB6, 0xFF)  # 浅蓝
         p1 = (0xFF, 0xF8, 0xEC)  # 奶白
         colors = ["#%02x%02x%02x" % tuple(
             int(p0[i] + (p1[i] - p0[i]) * (s / (steps - 1))) for i in range(3))
@@ -1827,10 +1830,12 @@ class App:
         def animate(step):
             try:
                 if step >= steps:
+                    cv.delete(outline)
                     cv.delete(item)
                     return
-                cv.itemconfigure(item, fill=colors[step])
-                cv.move(item, 0, -2)  # 每步上浮 2 像素
+                cv.itemconfigure(item, fill=colors[step])  # 主文字淡出
+                cv.move(outline, 0, -2)  # 每步上浮 2 像素
+                cv.move(item, 0, -2)
                 self.root.after(50, lambda: animate(step + 1))
             except Exception:
                 pass
