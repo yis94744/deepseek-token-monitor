@@ -888,7 +888,7 @@ class App:
         self.lbl_bal_cur.grid(row=0, column=0, sticky="w", padx=(0, 16))
         lbl_days = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
         lbl_days.grid(row=0, column=1, sticky="w", padx=(0, 16))
-        tk.Label(top, text="余额每日快照：刷新成功自动记录，一天一条", bg=C_BG,
+        tk.Label(top, text="余额每日快照：刷新成功自动记录，一天一条；充值=当日到账，扣款=当日实际消耗", bg=C_BG,
                  fg=C_SUB, font=(FONT, 8)).grid(row=1, column=0, columnspan=3, sticky="w")
 
         tk.Label(page, text="近 30 天余额走势", bg=C_BG, fg=C_BROWN_DARK,
@@ -897,13 +897,17 @@ class App:
                           highlightbackground=C_BROWN_LIGHT)
         chart.pack(fill="x", padx=12, pady=(0, 8))
 
-        tree = ttk.Treeview(page, columns=("date", "bal", "delta", "upd"), show="headings")
+        tree = ttk.Treeview(page, columns=("date", "bal", "recharge", "cost", "upd"),
+                            show="headings")
         for col, text, width in (("date", "日期", 110), ("bal", "余额(元)", 130),
-                                 ("delta", "当日变动", 130), ("upd", "更新时间", 170)):
+                                 ("recharge", "充值(元)", 130), ("cost", "扣款(元)", 130),
+                                 ("upd", "更新时间", 170)):
             tree.heading(col, text=text)
             tree.column(col, width=width, anchor="center" if col != "date" else "w")
-        tree.tag_configure("down", foreground=C_RED)
-        tree.tag_configure("up", foreground=C_GREEN)
+        # 充值列绿色（+），扣款列红色（-）
+        # ttk.Treeview 单元格着色：tag 形如 "<列名>:<tag名>"
+        tree.tag_configure("recharge_g", foreground=C_GREEN)
+        tree.tag_configure("cost_r", foreground=C_RED)
         tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         def refresh():
@@ -913,20 +917,20 @@ class App:
             self._draw_balance_chart(chart, list(reversed(storage.balance_history(30))))
             for item in tree.get_children():
                 tree.delete(item)
-            prev = None
-            for r in rows:
-                delta = None
-                if prev is not None:
-                    delta = round(r["balance"] - prev, 4)
-                prev = r["balance"]
-                tags = ()
-                if delta is not None:
-                    tags = ("down",) if delta < 0 else (("up",) if delta > 0 else ())
-                tree.insert("", "end", values=(
+            for i, r in enumerate(rows):
+                rc = r["recharge"] or 0.0
+                cost = r["usage_cost"] or 0.0
+                tags = []
+                if rc > 1e-9:
+                    tags.append("recharge:recharge_g")
+                if cost > 1e-9:
+                    tags.append("cost:cost_r")
+                tree.insert("", "end", iid="row%d" % i, values=(
                     r["date"], "%.4f" % r["balance"],
-                    "--" if delta is None else ("%+.4f" % delta),
+                    ("+%.4f" % rc) if rc > 1e-9 else "--",
+                    ("-%.4f" % cost) if cost > 1e-9 else "--",
                     r["updated_at"][11:16] if len(r["updated_at"]) >= 16 else r["updated_at"]),
-                    tags=tags)
+                    tags=tuple(tags))
 
         refresh()
         return refresh

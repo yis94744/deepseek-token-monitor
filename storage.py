@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS monthly_summaries (
 CREATE TABLE IF NOT EXISTS balance_history (
     date TEXT PRIMARY KEY,               -- 日期 YYYY-MM-DD（一天一条，后写的覆盖当天）
     balance REAL NOT NULL DEFAULT 0,     -- 当日余额(元)
+    recharge REAL NOT NULL DEFAULT 0,    -- 当日充值(元，正值=入账)
+    usage_cost REAL NOT NULL DEFAULT 0,  -- 当日扣款(元，按 requests 消耗流水精确统计)
     updated_at TEXT NOT NULL DEFAULT ''  -- 最近更新时间（ISO）
 );
 """
@@ -104,6 +106,12 @@ def init_db(data_dir: str):
                 conn.execute("ALTER TABLE requests ADD COLUMN api_key_hint TEXT")
             except sqlite3.OperationalError:
                 pass  # 列已存在，忽略
+            # 旧库迁移（v1.11.0）：balance_history 增加充值/扣款两列，老数据默认为 0
+            for col in ("recharge", "usage_cost"):
+                try:
+                    conn.execute("ALTER TABLE balance_history ADD COLUMN %s REAL NOT NULL DEFAULT 0" % col)
+                except sqlite3.OperationalError:
+                    pass  # 列已存在，忽略
             conn.commit()
         finally:
             conn.close()
@@ -358,24 +366,49 @@ def daily_stats(days: int = None) -> list:
 
 
 def save_balance_snapshot(balance: float):
-    """记录当日账户余额快照（每天一条，同一天后写的覆盖），供余额每日统计使用。"""
+    """记录当日账户余额快照（每天一条，同一天后写的覆盖），供余额每日统计使用。
+
+    同步写入当日扣款（usage_cost，来自 requests 真实消耗流水）与充值（recharge）：
+    - 扣款：当日所有请求 cost 之和，精确反映当天用了多少。
+    - 充值：外部充值无法直接读取，用余额净变动反推还原——
+      充值 = (当日余额 - 昨日余额) + 当日扣款。
+      这样即使当天"先充值后消耗"，也能还原出真实充值额，而不会像以前那样
+      被使用量污染（余额净变动=充值-扣款，加回扣款即还原）。
+    """
     today = date.today().isoformat()
     now = datetime.now().isoformat(timespec="seconds")
+    balance = float(balance)
+    usage_cost = _aggregate(today, today)["cost"]  # 当日真实消耗
+    # 昨日余额（取最近一条早于今天的快照；无则按首次记录，无历史时充值记为 0）
+    with _lock:
+        conn = _conn()
+        try:
+            prev = conn.execute(
+                "SELECT balance FROM balance_history WHERE date < ? ORDER BY date DESC LIMIT 1",
+                (today,)).fetchone()
+        finally:
+            conn.close()
+    prev_balance = prev[0] if prev else balance
+    recharge = max(0.0, (balance - prev_balance) + usage_cost)  # 反推充值，不为负
+
     with _lock:
         conn = _conn()
         try:
             conn.execute(
-                "INSERT INTO balance_history(date, balance, updated_at) VALUES(?,?,?) "
+                "INSERT INTO balance_history(date, balance, recharge, usage_cost, updated_at) "
+                "VALUES(?,?,?,?,?) "
                 "ON CONFLICT(date) DO UPDATE SET balance=excluded.balance, "
+                "recharge=excluded.recharge, usage_cost=excluded.usage_cost, "
                 "updated_at=excluded.updated_at",
-                (today, float(balance), now))
+                (today, balance, round(recharge, 6), round(usage_cost, 6), now))
             conn.commit()
         finally:
             conn.close()
 
 
 def balance_history(days: int = None) -> list:
-    """账户余额每日快照，返回按日期倒序的列表：date / balance / updated_at。
+    """账户余额每日快照，返回按日期倒序的列表：
+    date / balance / recharge / usage_cost / updated_at。
 
     供主界面"余额统计"页使用。
     """
@@ -388,11 +421,12 @@ def balance_history(days: int = None) -> list:
         conn = _conn()
         try:
             rows = conn.execute(
-                "SELECT date, balance, updated_at FROM balance_history" + where +
-                " ORDER BY date DESC", args).fetchall()
+                "SELECT date, balance, recharge, usage_cost, updated_at "
+                "FROM balance_history" + where + " ORDER BY date DESC", args).fetchall()
         finally:
             conn.close()
-    return [{"date": r[0], "balance": round(r[1], 4), "updated_at": r[2]} for r in rows]
+    return [{"date": r[0], "balance": round(r[1], 4), "recharge": round(r[2], 4),
+             "usage_cost": round(r[3], 4), "updated_at": r[4]} for r in rows]
 
 
 def period_stats(days: int = None, config: dict = None) -> list:
