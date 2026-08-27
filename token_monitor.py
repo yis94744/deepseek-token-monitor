@@ -595,12 +595,16 @@ class App:
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self.nb = nb
         self._build_dashboard_page(nb)     # 0 仪表盘（由定时器实时刷新）
+        today = date.today()
         self._page_refreshers[1] = self._add_summary_page(
-            nb, "今日", 1, storage.today_stats, storage.today_breakdown)
+            nb, "今日", 1, storage.today_stats, storage.today_breakdown,
+            lambda: storage.source_breakdown(today, today))
         self._page_refreshers[2] = self._add_summary_page(
-            nb, "本周", 2, storage.this_week_stats, storage.this_week_breakdown)
+            nb, "本周", 2, storage.this_week_stats, storage.this_week_breakdown,
+            lambda: storage.source_breakdown(storage.week_range_start(), today))
         self._page_refreshers[3] = self._add_summary_page(
-            nb, "本月", 3, storage.this_month_stats, storage.this_month_breakdown)
+            nb, "本月", 3, storage.this_month_stats, storage.this_month_breakdown,
+            lambda: storage.source_breakdown(today.replace(day=1), today))
         self._page_refreshers[4] = self._add_daily_page(nb, 4)
         self._page_refreshers[5] = self._add_balance_page(nb, 5)
         self._page_refreshers[6] = self._add_period_page(nb, 6)
@@ -785,7 +789,7 @@ class App:
                       fill=C_BROWN_DARK, font=(FONT, 8, "bold"))
 
     # ---------- 今日/本周/本月 汇总页 ----------
-    def _add_summary_page(self, nb, title, index, agg_fn, brk_fn):
+    def _add_summary_page(self, nb, title, index, agg_fn, brk_fn, src_fn):
         page = tk.Frame(nb, bg=C_BG)
         nb.add(page, text=title)
         top = tk.Frame(page, bg=C_BG)
@@ -799,18 +803,31 @@ class App:
         lbl_cost = tk.Label(top, text="", bg=C_BG, fg=C_ORANGE_DEEP, font=(FONT, 10, "bold"))
         lbl_cost.grid(row=0, column=3, sticky="w")
 
-        tree = self._make_model_tree(page)
-        tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        # 左右两栏：左=按模型，右=按客户端来源
+        mid = tk.Frame(page, bg=C_BG)
+        mid.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        mid.grid_columnconfigure(0, weight=3)
+        mid.grid_columnconfigure(1, weight=2)
+        tk.Label(mid, text="按模型", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 4))
+        tk.Label(mid, text="按客户端", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).grid(row=0, column=1, sticky="w", pady=(0, 4))
+        tree = self._make_model_tree(mid)
+        tree.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        stree = self._make_source_tree(mid)
+        stree.grid(row=1, column=1, sticky="nsew")
 
         def refresh():
             s = agg_fn()
             b = brk_fn()
+            sb = src_fn()
             lbl_requests.config(text=f"请求数  {fmt_int(s['requests'])}")
             lbl_input.config(text=f"输入  {fmt_int(s['cache_hit'] + s['cache_miss'])}"
                                    f"（命中 {fmt_int(s['cache_hit'])}）")
             lbl_output.config(text=f"输出  {fmt_int(s['completion'])}")
             lbl_cost.config(text=f"费用  {fmt_money(s['cost'])}")
             self._fill_model_tree(tree, b)
+            self._fill_source_tree(stree, sb)
 
         refresh()
         return refresh
@@ -1255,6 +1272,25 @@ class App:
         for row in rows:
             tree.insert("", "end", values=(
                 row["model"], fmt_int(row["requests"]),
+                fmt_int(row["cache_hit"] + row["cache_miss"]),
+                fmt_int(row["completion"]), fmt_money(row["cost"])))
+
+    def _make_source_tree(self, parent):
+        tree = ttk.Treeview(parent, columns=("source", "req", "input", "output", "cost"),
+                            show="headings")
+        for col, text, width in (("source", "客户端", 150), ("req", "请求数", 80),
+                                 ("input", "输入token", 110), ("output", "输出token", 110),
+                                 ("cost", "费用", 110)):
+            tree.heading(col, text=text)
+            tree.column(col, width=width, anchor="center" if col != "source" else "w")
+        return tree
+
+    def _fill_source_tree(self, tree, rows):
+        for item in tree.get_children():
+            tree.delete(item)
+        for row in rows:
+            tree.insert("", "end", values=(
+                row["source"], fmt_int(row["requests"]),
                 fmt_int(row["cache_hit"] + row["cache_miss"]),
                 fmt_int(row["completion"]), fmt_money(row["cost"])))
     # ---------- 历史快照页 ----------

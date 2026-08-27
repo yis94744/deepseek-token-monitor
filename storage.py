@@ -197,6 +197,43 @@ def today_stats() -> dict:
     return _aggregate(today, today)
 
 
+def _source_breakdown(date_from: str, date_to: str) -> list:
+    """按客户端/来源分组统计某日期区间用量，返回列表。
+
+    按 source_key 前缀归属：cb=CodeBuddy、wb=WorkBuddy、yq=YQ Harness、
+    cc=CC Switch，其余（含无 source_key 的本地代理流量）=本地代理。
+    """
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT CASE "
+                " WHEN source_key LIKE 'cb:%' THEN 'CodeBuddy' "
+                " WHEN source_key LIKE 'wb:%' THEN 'WorkBuddy' "
+                " WHEN source_key LIKE 'yq:%' THEN 'YQ Harness' "
+                " WHEN source_key LIKE 'cc:%' THEN 'CC Switch' "
+                " ELSE '本地代理' END src, "
+                "COUNT(*), COALESCE(SUM(prompt_cache_hit_tokens),0), "
+                "COALESCE(SUM(prompt_cache_miss_tokens),0), "
+                "COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cost),0) "
+                "FROM requests WHERE date BETWEEN ? AND ? "
+                "GROUP BY src ORDER BY 6 DESC",
+                (date_from, date_to),
+            ).fetchall()
+        finally:
+            conn.close()
+    return [
+        {"source": r[0], "requests": r[1], "cache_hit": r[2], "cache_miss": r[3],
+         "completion": r[4], "cost": round(r[5], 6)}
+        for r in rows
+    ]
+
+
+def source_breakdown(start: date, end: date) -> list:
+    """按客户端/来源分组统计 [start, end] 区间的用量明细。"""
+    return _source_breakdown(start.isoformat(), end.isoformat())
+
+
 def today_breakdown() -> list:
     """今日各模型明细。"""
     today = date.today().isoformat()
