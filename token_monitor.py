@@ -26,8 +26,6 @@ from tkinter import messagebox, ttk
 
 import cc_switch_sync
 import codebuddy_sync
-import dsh_sync
-import kun_sync
 import proxy_server
 import scheduler
 import storage
@@ -102,16 +100,6 @@ DEFAULT_CONFIG = {
         "db_path": "",
         "app_types": ["codex"],
         "sync_interval_seconds": 2,
-    },
-    "kun": {
-        "enabled": True,
-        "threads_dir": "",
-        "sync_interval_seconds": 3,
-    },
-    "dsh": {
-        "enabled": True,
-        "projcache_path": "",
-        "sync_interval_seconds": 5,
     },
     "yq": {
         "enabled": True,
@@ -347,14 +335,6 @@ class App:
         threading.Thread(target=cc_switch_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
-        # Kun 数据同步线程：只读 Kun 本地可观测记录（observability/model-http）
-        threading.Thread(target=kun_sync.run,
-                         args=(self.config, self.settings, self.state, self.stop_event),
-                         daemon=True).start()
-        # DeepSeek Harness 数据同步线程：只读 dsh 会话用量投影缓存
-        threading.Thread(target=dsh_sync.run,
-                         args=(self.config, self.settings, self.state, self.stop_event),
-                         daemon=True).start()
         # YQ Harness 数据同步线程：只读 YQ 会话用量投影缓存
         threading.Thread(target=yq_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
@@ -432,16 +412,6 @@ class App:
     def _toggle_cc(self):
         """设置页：开关 CC Switch 同步（同步线程常驻，读到配置变化后自动生效）。"""
         self.config.setdefault("cc_switch", {})["enabled"] = self.cc_var.get()
-        self._save_config()
-
-    def _toggle_kun(self):
-        """设置页：开关 Kun 同步（同步线程常驻，读到配置变化后自动生效）。"""
-        self.config.setdefault("kun", {})["enabled"] = self.kun_var.get()
-        self._save_config()
-
-    def _toggle_dsh(self):
-        """设置页：开关 DeepSeek Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
-        self.config.setdefault("dsh", {})["enabled"] = self.dsh_var.get()
         self._save_config()
 
     def _toggle_yq(self):
@@ -1371,14 +1341,6 @@ class App:
             value=bool((self.config.get("cc_switch") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="CC Switch 同步", variable=self.cc_var,
                         command=self._toggle_cc).pack(anchor="w", pady=(0, 4))
-        self.kun_var = tk.BooleanVar(
-            value=bool((self.config.get("kun") or {}).get("enabled", True)))
-        ttk.Checkbutton(left, text="Kun 同步", variable=self.kun_var,
-                        command=self._toggle_kun).pack(anchor="w", pady=(0, 4))
-        self.dsh_var = tk.BooleanVar(
-            value=bool((self.config.get("dsh") or {}).get("enabled", True)))
-        ttk.Checkbutton(left, text="DeepSeek Harness 同步", variable=self.dsh_var,
-                        command=self._toggle_dsh).pack(anchor="w", pady=(0, 4))
         self.yq_var = tk.BooleanVar(
             value=bool((self.config.get("yq") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="YQ Harness 同步", variable=self.yq_var,
@@ -1398,12 +1360,6 @@ class App:
         # CC Switch 数据同步状态
         self.lbl_ccsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
         self.lbl_ccsync.pack(anchor="w", pady=(0, 6))
-        # Kun 数据同步状态
-        self.lbl_kunsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_kunsync.pack(anchor="w", pady=(0, 6))
-        # DeepSeek Harness 数据同步状态
-        self.lbl_dshsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_dshsync.pack(anchor="w", pady=(0, 6))
         # YQ Harness 数据同步状态
         self.lbl_yqsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
         self.lbl_yqsync.pack(anchor="w", pady=(0, 6))
@@ -1982,31 +1938,6 @@ class App:
                     text=f"CC Switch 同步：运行中 · 累计导入 {fmt_int(cc.get('total_added', 0))} 条"
                          f" · {cc.get('last_time', '')}", fg=C_GREEN)
 
-        # 4.5) Kun 数据同步状态
-        if hasattr(self, "lbl_kunsync"):
-            kun = self.state.get("kun_sync")
-            if not kun or not kun.get("enabled"):
-                self.lbl_kunsync.config(text="Kun 同步：未启用", fg=C_SUB)
-            elif kun.get("error"):
-                self.lbl_kunsync.config(
-                    text="Kun 同步：读取失败 " + str(kun["error"]), fg=C_RED)
-            else:
-                self.lbl_kunsync.config(
-                    text=f"Kun 同步：运行中 · 累计导入 {fmt_int(kun.get('total_added', 0))} 条"
-                         f" · {kun.get('last_time', '')}", fg=C_GREEN)
-
-        # 4.6) DeepSeek Harness 数据同步状态
-        if hasattr(self, "lbl_dshsync"):
-            dsh = self.state.get("dsh_sync")
-            if not dsh or not dsh.get("enabled"):
-                self.lbl_dshsync.config(text="Harness 同步：未启用", fg=C_SUB)
-            elif dsh.get("error"):
-                self.lbl_dshsync.config(
-                    text="Harness 同步：读取失败 " + str(dsh["error"]), fg=C_RED)
-            else:
-                self.lbl_dshsync.config(
-                    text=f"Harness 同步：运行中 · 累计导入 {fmt_int(dsh.get('total_added', 0))} 条"
-                         f" · {dsh.get('last_time', '')}", fg=C_GREEN)
 
         # 4.7) YQ Harness 数据同步状态
         if hasattr(self, "lbl_yqsync"):

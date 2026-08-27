@@ -6,8 +6,8 @@
 默认库路径为 %APPDATA%\\DeepSeekTokenMonitor\\data\\usage.db。
 
 步骤：
-1. dsh / yq 会话按解析出的真实模型重归属（沿用 dsh_sync / yq_sync 的模型解析）；
-2. 所有行（dsh / yq / cc / kun / 代理）按 model + created_at 重新取价并重算 cost：
+1. yq 会话按解析出的真实模型重归属（沿用 yq_sync 的模型解析）；
+2. 所有行（yq / cc / 代理）按 model + created_at 重新取价并重算 cost：
    - 2026-08-17 之前 → legacy 平峰价；
    - 高峰时段（默认每日 9:00-14:00）→ peak 价；
    - 其余 → 空闲价。
@@ -19,7 +19,6 @@ import sys
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import dsh_sync
 import pricing
 import yq_sync
 
@@ -35,8 +34,8 @@ print("官网新价生效:", pricing._legacy_until(config).strftime("%Y-%m-%d"),
 con = sqlite3.connect(DB)
 cur = con.cursor()
 
-# ---- 1) dsh / yq 会话模型重归属 ----
-for prefix, syncer in (("dsh", dsh_sync), ("yq", yq_sync)):
+# ---- 1) yq 会话模型重归属 ----
+for prefix, syncer in (("yq", yq_sync),):
     sids = [r[0] for r in cur.execute(
         "SELECT DISTINCT substr(source_key, 5, instr(substr(source_key, 5), ':') - 1) "
         "FROM requests WHERE source_key LIKE '%s:%%'" % prefix).fetchall()]
@@ -84,9 +83,8 @@ print("改写行数: %d, 时间解析失败(未改): %d" % (fixed, bad))
 # ---- 3) 按来源/模型汇总 ----
 print("\n按来源汇总:")
 for r in cur.execute(
-    "SELECT CASE WHEN source_key LIKE 'dsh:%' THEN 'dsh' WHEN source_key LIKE 'yq:%' THEN 'yq' "
-    "WHEN source_key LIKE 'cc:%' THEN 'cc' "
-    "WHEN source_key LIKE 'kun:%' THEN 'kun' ELSE 'proxy' END AS src, "
+    "SELECT CASE WHEN source_key LIKE 'yq:%' THEN 'yq' "
+    "WHEN source_key LIKE 'cc:%' THEN 'cc' ELSE 'proxy' END AS src, "
     "COUNT(*), SUM(cost) FROM requests GROUP BY src").fetchall():
     print("  %-6s %5d 行  费用 %10.6f 元" % (r[0], r[1], r[2] or 0))
 print("\n按模型汇总:")

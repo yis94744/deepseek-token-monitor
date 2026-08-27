@@ -577,20 +577,12 @@ def add_external_requests(rows: list) -> int:
             conn.close()
     return added
 
-def dsh_cumulative(sid: str):
-    """返回某 Harness 会话已入库的累计总量 (hit, miss, comp)（各增量行求和），无记录则 None。
-
-    供 dsh 同步做无状态差分：以库内全部记录求和为准，进程重启、settings
-    丢失都不会漏记或重复计费——重启后第一次同步会补上"上次入库以来的全部
-    增量"；去重键用累计总量本身，同一总量只入库一次。
-    """
-    return _cumulative("dsh", sid)
-
-
 def yq_cumulative(sid: str):
     """返回某 YQ Harness 会话已入库的累计总量 (hit, miss, comp)，无记录则 None。
 
-    与 dsh_cumulative 同口径（无状态差分、总量去重），前缀为 yq:。
+    无状态差分、总量去重：以库内全部记录求和为准，进程重启、settings 丢失
+    都不会漏记或重复计费——重启后第一次同步会补上"上次入库以来的全部增量"；
+    去重键用累计总量本身，同一总量只入库一次。前缀为 yq:。
     """
     return _cumulative("yq", sid)
 

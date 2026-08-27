@@ -105,7 +105,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     body = json.dumps(req_json, ensure_ascii=False).encode("utf-8")
 
         # 3.6) 按 API Key 统计：抓 Authorization / X-API-Key 头，只存指纹不存明文
-        #      （仅本地代理流量带 Key 指纹；CC/Kun/DSH/YQ 等外部导入无 Key）
+        #      （仅本地代理流量带 Key 指纹；CC/YQ/CodeBuddy/WorkBuddy 等外部导入无 Key）
         api_key_hash = api_key_hint = None
         if is_chat:
             auth = self.headers.get("Authorization") or self.headers.get("X-API-Key") or ""

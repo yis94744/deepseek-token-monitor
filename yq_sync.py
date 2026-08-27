@@ -10,8 +10,8 @@ YQ_HOME 环境变量指定）：
     uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
 本模块只读该文件，把各会话的用量增量同步到本软件的 usage.db。
 
-计费口径：与 CC Switch / Kun / DeepSeek Harness 同步一致，按 config.json
-的人民币单价用 token 数重新计算。只提取用量数值，不读取任何对话内容。
+计费口径：与其他数据源同步一致，按 config.json 的人民币单价用 token 数
+重新计算。只提取用量数值，不读取任何对话内容。
 
 模型归属：投影缓存没有模型字段。YQ 桌面端用 --port 0 启动后端（端口随机），
 所以默认不依赖固定 API 端口：优先 config.yq.models 手动映射，其次 settings

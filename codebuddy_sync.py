@@ -16,8 +16,8 @@ usage JSON 字段（与 DeepSeek 官方口径一致）：
   credit            CodeBuddy 内部点数（不用于本项目计费）
 
 本模块只读日志尾部增量，把每次 Agent 回合的用量同步到 usage.db；
-计费口径与 CC Switch / Kun / Harness 同步一致：按 config.json 的人民币
-单价用 token 数重新计算。只提取 usage 数值，不读取任何对话内容。
+计费口径与其他数据源同步一致：按 config.json 的人民币单价用 token 数
+重新计算。只提取 usage 数值，不读取任何对话内容。
 
 说明：CodeBuddy 的会话级用量在本地仅此日志路径（state.vscdb 里的
 CodeBuddy-LLMDataReportCACHE-llm-data 为加密上报缓存，无法解析），
