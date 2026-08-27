@@ -1816,15 +1816,18 @@ class App:
         except Exception:
             return
         text = "+" + fmt_int(total)
-        # 连续多个弹窗略微错位，避免完全重叠
+        # 连续多个弹窗略微错位（垂直错开），避免完全重叠
         self._popups = (self._popups + 1) % 3
         bx, by = self.float_win.winfo_rootx(), self.float_win.winfo_rooty()
         bw = self.float_size  # 48，圆球宽
-        pop_w, pop_h = 110, 22
-        # 居中悬浮球上方，叠加错位偏移
-        offset = (self._popups - 1) * 4
-        px = bx + bw // 2 - pop_w // 2 + offset
-        py = by - pop_h - 6  # 悬浮球上沿之上 6px
+        font = (MONO, 11, "bold")
+        # 弹窗宽度随文本自适应，文字在弹窗内水平居中，整体以悬浮球中心为锚点向两边扩展
+        pad = 12  # 左右留白
+        pop_w = len(text) * 9 + pad  # 11px 加粗约每字符 9px
+        pop_h = 22
+        # 水平严格居中悬浮球中心；垂直方向上沿之上 6px（多个弹窗垂直错开）
+        px = bx + bw // 2 - pop_w // 2
+        py = by - pop_h - 6 - (self._popups - 1) * 6
 
         pop = tk.Toplevel(self.float_win)
         pop.overrideredirect(True)
@@ -1835,11 +1838,10 @@ class App:
             pass
         cv = tk.Canvas(pop, width=pop_w, height=pop_h, highlightthickness=0, bg=C_KEY)
         cv.pack()
+        cx, cy = pop_w // 2, pop_h // 2
         # 浅蓝主文字 + 深蓝描边（错位 1px），在桌面背景上数字清晰
-        outline = cv.create_text(pop_w // 2 + 1, pop_h // 2 + 1, text=text,
-                                 fill="#1d5f8a", font=(MONO, 11, "bold"))
-        item = cv.create_text(pop_w // 2, pop_h // 2, text=text,
-                              fill="#4db6ff", font=(MONO, 11, "bold"))
+        outline = cv.create_text(cx + 1, cy + 1, text=text, fill="#1d5f8a", font=font)
+        item = cv.create_text(cx, cy, text=text, fill="#4db6ff", font=font)
         pop.geometry(f"+{px}+{py}")
 
         # 渐隐色阶：浅蓝 -> 桌面淡出(奶白)，模拟淡出（12 帧约 0.6 秒）
