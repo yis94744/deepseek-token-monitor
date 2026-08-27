@@ -1803,23 +1803,46 @@ class App:
             self._float_place_panel()
 
     def _float_popup(self, total: int):
-        """在圆球上方弹出一个 +N，并上浮淡出。"""
-        cv = self.float_cv
+        """在悬浮球正上方弹出一个独立的 +N 气泡，上浮淡出。
+
+        之前在悬浮球 48x48 画布上画文字，数字稍长（几万 token）就被画布裁断
+        且和噜噜头像叠在一起，用户完全看不到。现改为独立 Toplevel 弹窗：
+        宽 110px 足够显示任何长度的 +N，定位在悬浮球正上方居中，深蓝描边 +
+        浅蓝主文字清晰可读，整体上浮淡出。
+        """
         try:
             if not self.float_win.winfo_viewable():
                 return  # 悬浮窗隐藏时不弹
         except Exception:
             return
         text = "+" + fmt_int(total)
-        # 连续多个弹窗略微右移错位，避免完全重叠
+        # 连续多个弹窗略微错位，避免完全重叠
         self._popups = (self._popups + 1) % 3
-        x = 10 + self._popups * 5
-        # 浅蓝主文字 + 深蓝描边（错位 1px），在奶白底上数字清晰醒目
-        outline = cv.create_text(x + 1, 26, anchor="w", text=text, fill="#1d5f8a",
-                                 font=(MONO, 9, "bold"))
-        item = cv.create_text(x, 25, anchor="w", text=text, fill="#4db6ff",
-                              font=(MONO, 9, "bold"))
-        # 渐隐色阶：浅蓝 -> 悬浮窗奶白底色，模拟淡出（12 帧约 0.6 秒）
+        bx, by = self.float_win.winfo_rootx(), self.float_win.winfo_rooty()
+        bw = self.float_size  # 48，圆球宽
+        pop_w, pop_h = 110, 22
+        # 居中悬浮球上方，叠加错位偏移
+        offset = (self._popups - 1) * 4
+        px = bx + bw // 2 - pop_w // 2 + offset
+        py = by - pop_h - 6  # 悬浮球上沿之上 6px
+
+        pop = tk.Toplevel(self.float_win)
+        pop.overrideredirect(True)
+        pop.attributes("-topmost", True)
+        try:
+            pop.attributes("-transparentcolor", C_KEY)
+        except Exception:
+            pass
+        cv = tk.Canvas(pop, width=pop_w, height=pop_h, highlightthickness=0, bg=C_KEY)
+        cv.pack()
+        # 浅蓝主文字 + 深蓝描边（错位 1px），在桌面背景上数字清晰
+        outline = cv.create_text(pop_w // 2 + 1, pop_h // 2 + 1, text=text,
+                                 fill="#1d5f8a", font=(MONO, 11, "bold"))
+        item = cv.create_text(pop_w // 2, pop_h // 2, text=text,
+                              fill="#4db6ff", font=(MONO, 11, "bold"))
+        pop.geometry(f"+{px}+{py}")
+
+        # 渐隐色阶：浅蓝 -> 桌面淡出(奶白)，模拟淡出（12 帧约 0.6 秒）
         steps = 12
         p0 = (0x4D, 0xB6, 0xFF)  # 浅蓝
         p1 = (0xFF, 0xF8, 0xEC)  # 奶白
@@ -1830,12 +1853,11 @@ class App:
         def animate(step):
             try:
                 if step >= steps:
-                    cv.delete(outline)
-                    cv.delete(item)
+                    pop.destroy()
                     return
                 cv.itemconfigure(item, fill=colors[step])  # 主文字淡出
-                cv.move(outline, 0, -2)  # 每步上浮 2 像素
-                cv.move(item, 0, -2)
+                cv.move(outline, 0, -3)  # 每步上浮 3 像素
+                cv.move(item, 0, -3)
                 self.root.after(50, lambda: animate(step + 1))
             except Exception:
                 pass
