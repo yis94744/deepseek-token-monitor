@@ -35,7 +35,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.12.0"
+APP_VERSION = "1.12.1"
 
 
 # ================= 路径与资源 =================
@@ -1931,7 +1931,7 @@ class App:
 
     # ================= 桌宠形态（点击弹四种信息面板） =================
     def _build_pet_window(self):
-        """桌宠窗口：透明底水豚本体（mascot.png），可拖动，点击弹出信息面板。"""
+        """桌宠窗口：透明底本体（assets/pet.png，用户提供的无背景图），可拖动，点击弹出信息面板。"""
         IMG = 96  # 桌宠本体尺寸
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
@@ -1956,7 +1956,7 @@ class App:
         if img is not None:
             cv.create_image(IMG / 2, IMG / 2, image=img, tags="petbody")
         else:  # Pillow 不可用：直接贴原图（透明底 PNG）
-            av = self._keep_image(_res("mascot.png"), subsample=3)  # 300 -> 100
+            av = self._keep_image(_res("pet.png"), subsample=10)  # 1000 -> 100
             cv.create_image(IMG / 2, IMG / 2, image=av, tags="petbody")
 
         # 事件：点击弹面板 / 拖动 / 双击主界面 / 右键菜单 / 按压回弹
@@ -1990,7 +1990,7 @@ class App:
             SS = 6
             W = size * SS
             resample = getattr(Image, "Resampling", Image).LANCZOS
-            img = Image.open(_res("mascot.png")).convert("RGBA").resize((W, W), resample)
+            img = Image.open(_res("pet.png")).convert("RGBA").resize((W, W), resample)
             small = img.resize((size, size), resample)
             out = Image.new("RGB", (size, size), C_KEY)
             pxo = out.load()
