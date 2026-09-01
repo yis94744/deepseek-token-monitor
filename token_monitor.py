@@ -26,6 +26,7 @@ from tkinter import messagebox, ttk
 
 import cc_switch_sync
 import codebuddy_sync
+import pricing
 import proxy_server
 import scheduler
 import storage
@@ -34,7 +35,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.11.1"
+APP_VERSION = "1.12.0"
 
 
 # ================= 路径与资源 =================
@@ -357,6 +358,8 @@ class App:
         self._tray_icon = None
         self._build_main_window()
         self._build_float_window()
+        self._build_pet_window()        # 桌宠形态（设置页可切换 悬浮窗/桌宠）
+        self._apply_form(self.settings.get("display_form", "float"), save=False)
 
         # 自动更新检测线程：启动即检查一次，之后按配置间隔周期检查
         updater.init_log(DATA_DIR)
@@ -1347,10 +1350,17 @@ class App:
         left = tk.Frame(page, bg=C_BG)
         left.pack(side="left", fill="both", expand=True, padx=14, pady=12)
 
-        # 悬浮窗开关
+        # 桌面挂件：总开关 + 形态（悬浮窗 / 桌宠）二选一
         self.float_var = tk.BooleanVar(value=bool(self.settings.get("float_window", True)))
-        ttk.Checkbutton(left, text="显示桌面悬浮窗", variable=self.float_var,
-                        command=self._toggle_float).pack(anchor="w", pady=(0, 10))
+        ttk.Checkbutton(left, text="显示桌面挂件", variable=self.float_var,
+                        command=self._toggle_float).pack(anchor="w", pady=(0, 4))
+        self.form_var = tk.StringVar(value=self.settings.get("display_form", "float"))
+        form_row = tk.Frame(left, bg=C_BG)
+        form_row.pack(anchor="w", pady=(0, 10))
+        ttk.Radiobutton(form_row, text="悬浮窗", value="float", variable=self.form_var,
+                        command=lambda: self._toggle_form("float")).pack(side="left", padx=(0, 8))
+        ttk.Radiobutton(form_row, text="桌宠", value="pet", variable=self.form_var,
+                        command=lambda: self._toggle_form("pet")).pack(side="left")
 
         # 余额刷新间隔
         row = tk.Frame(left, bg=C_BG)
@@ -1538,12 +1548,36 @@ class App:
                   relief="flat", command=win.destroy).pack(side="left", padx=8)
 
     def _toggle_float(self):
+        """总开关：显示/隐藏当前形态的桌面挂件（悬浮窗或桌宠）。"""
         self.settings["float_window"] = bool(self.float_var.get())
         save_settings(self.settings)
-        if self.float_var.get():
-            self.float_win.deiconify()
+        self._apply_form(self.settings.get("display_form", "float"), save=False)
+
+    def _toggle_form(self, form):
+        """设置页：切换 悬浮窗 / 桌宠 形态（互斥，只显示选中的一种）。"""
+        self.settings["display_form"] = form
+        save_settings(self.settings)
+        self._apply_form(form)
+
+    def _apply_form(self, form, save=True):
+        """按形态与总开关显示/隐藏悬浮窗与桌宠窗口。form ∈ {"float","pet"}。"""
+        if save:
+            self.settings["display_form"] = form
+            save_settings(self.settings)
+        show = bool(self.settings.get("float_window", True))
+        # 隐藏未选中的形态，关闭其面板
+        if form == "pet":
+            if getattr(self, "float_win", None):
+                self.float_win.withdraw()
+            self._pet_set_visible(show)
         else:
-            self.float_win.withdraw()
+            if getattr(self, "pet_win", None):
+                self.pet_win.withdraw()
+            if getattr(self, "float_win", None):
+                if show:
+                    self.float_win.deiconify()
+                else:
+                    self.float_win.withdraw()
 
     def _save_refresh_interval(self):
         try:
@@ -1889,10 +1923,270 @@ class App:
         self.root.after(300, lambda: self.root.attributes("-topmost", False))
 
     def _hide_float(self):
+        """隐藏当前形态的桌面挂件（悬浮窗右键/桌宠右键菜单共用）。"""
         self.float_var.set(False)
         self.settings["float_window"] = False
         save_settings(self.settings)
-        self.float_win.withdraw()
+        self._apply_form(self.settings.get("display_form", "float"), save=False)
+
+    # ================= 桌宠形态（点击弹四种信息面板） =================
+    def _build_pet_window(self):
+        """桌宠窗口：透明底水豚本体（mascot.png），可拖动，点击弹出信息面板。"""
+        IMG = 96  # 桌宠本体尺寸
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        try:
+            win.attributes("-transparentcolor", C_KEY)
+        except Exception:
+            pass
+        self.pet_win = win
+        self.pet_size = IMG
+        self._pet_drag_off = (0, 0)
+        self._pet_drag_start = (0, 0)
+        self._pet_panel_open = False
+        self._pet_squish = False  # 按压 Q 弹状态
+
+        cv = tk.Canvas(win, width=IMG, height=IMG, highlightthickness=0, bg=C_KEY)
+        cv.pack()
+        self.pet_cv = cv
+        # 桌宠本体：透明底水豚。Pillow 精确缩放到 IMG 并展平透明键色，
+        # 消除缩放的毛边并让圆角/抗锯齿边缘干净。
+        img = self._make_pet_image(IMG)
+        if img is not None:
+            cv.create_image(IMG / 2, IMG / 2, image=img, tags="petbody")
+        else:  # Pillow 不可用：直接贴原图（透明底 PNG）
+            av = self._keep_image(_res("mascot.png"), subsample=3)  # 300 -> 100
+            cv.create_image(IMG / 2, IMG / 2, image=av, tags="petbody")
+
+        # 事件：点击弹面板 / 拖动 / 双击主界面 / 右键菜单 / 按压回弹
+        cv.bind("<Enter>", self._pet_on_hover)
+        cv.bind("<Leave>", self._pet_on_leave)
+        cv.bind("<ButtonPress-1>", self._pet_press)
+        cv.bind("<B1-Motion>", self._pet_on_drag)
+        cv.bind("<ButtonRelease-1>", self._pet_release)
+        cv.bind("<Double-Button-1>", lambda e: self._show_main())
+        cv.bind("<Button-3>", self._pet_menu)
+
+        # 信息面板
+        self._build_pet_panel()
+
+        # 初始位置：优先保存的位置，否则屏幕右下角
+        x = self.settings.get("pet_x")
+        y = self.settings.get("pet_y")
+        if x is None or y is None:
+            x = win.winfo_screenwidth() - IMG - 40
+            y = win.winfo_screenheight() - IMG - 80
+        win.geometry(f"+{x}+{y}")
+        win.withdraw()
+
+    def _make_pet_image(self, size: int):
+        """Pillow 把水豚本体精确缩放到 size，展平半透明为透明键色（返回 tk.PhotoImage）。"""
+        try:
+            from PIL import Image
+        except Exception:
+            return None
+        try:
+            SS = 6
+            W = size * SS
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            img = Image.open(_res("mascot.png")).convert("RGBA").resize((W, W), resample)
+            small = img.resize((size, size), resample)
+            out = Image.new("RGB", (size, size), C_KEY)
+            pxo = out.load()
+            pxi = small.load()
+            for yy in range(size):
+                for xx in range(size):
+                    r, g, b, a = pxi[xx, yy]
+                    pxo[xx, yy] = (r, g, b) if a >= 90 else (0xFF, 0x00, 0xFE)
+            import io
+            buf = io.BytesIO()
+            out.save(buf, format="PNG")
+            photo = tk.PhotoImage(data=buf.getvalue())
+            self._images.append(photo)
+            return photo
+        except Exception:
+            return None
+
+    def _pet_set_visible(self, show: bool):
+        """桌宠窗口显示/隐藏（同时收起面板）。"""
+        if getattr(self, "pet_win", None) is None:
+            return
+        if show:
+            self.pet_win.deiconify()
+            self.pet_win.lift()
+        else:
+            self.pet_win.withdraw()
+            self._pet_panel_open = False
+            try:
+                self.pet_panel.withdraw()
+            except Exception:
+                pass
+
+    def _build_pet_panel(self):
+        """桌宠信息面板：余额 / 今日消耗 / 今日当前Key / 峰谷（梁文峰·梁文谷）。"""
+        w, h = 248, 178
+        panel = tk.Toplevel(self.root)
+        panel.overrideredirect(True)
+        panel.attributes("-topmost", True)
+        try:
+            panel.attributes("-transparentcolor", C_KEY)
+        except Exception:
+            pass
+        self.pet_panel = panel
+        cv = tk.Canvas(panel, width=w, height=h, highlightthickness=0, bg=C_KEY)
+        cv.pack()
+        self.pet_panel_cv = cv
+        rounded_rect(cv, 2, 2, w - 2, h - 2, 14, fill="#fff8ec", outline=C_ORANGE, width=2)
+        cv.create_text(16, 18, anchor="w", text="噜噜 · 桌宠", fill=C_BROWN_DARK,
+                       font=(FONT, 10, "bold"))
+        cv.create_text(w - 14, 18, text="✕", fill=C_SUB, font=(FONT, 10, "bold"), tags="close")
+        cv.tag_bind("close", "<Button-1>", lambda e: self._pet_toggle_panel(force_close=True))
+        rows = [
+            ("当前余额", "pet_p_balance", C_GREEN),
+            ("今日消耗", "pet_p_cost", C_ORANGE_DEEP),
+            ("今日当前Key", "pet_p_key", C_BROWN_DARK),
+            ("当前计价时段", "pet_p_peak", C_BROWN_DARK),
+        ]
+        y = 44
+        for label, attr, color in rows:
+            cv.create_text(18, y, anchor="w", text=label, fill=C_SUB, font=(FONT, 9))
+            item = cv.create_text(w - 16, y, anchor="e", text="--", fill=color,
+                                  font=(MONO, 9, "bold"))
+            setattr(self, attr, item)
+            y += 33
+        panel.withdraw()
+
+    def _pet_place_panel(self):
+        """把信息面板放到桌宠右侧（贴边防溢出屏幕）并显示、刷新内容。"""
+        panel = self.pet_panel
+        w, h = 248, 178
+        bx, by = self.pet_win.winfo_x(), self.pet_win.winfo_y()
+        sw, sh = panel.winfo_screenwidth(), panel.winfo_screenheight()
+        x = bx + self.pet_size + 8
+        if x + w > sw:
+            x = bx - w - 8
+        y = min(max(by - 20, 0), sh - h - 40)
+        panel.geometry(f"+{int(x)}+{int(y)}")
+        panel.deiconify()
+        panel.lift()
+        self._pet_panel_open = True
+        self._refresh_pet_panel()
+
+    def _pet_toggle_panel(self, force_close=False):
+        if force_close or self._pet_panel_open:
+            self.pet_panel.withdraw()
+            self._pet_panel_open = False
+            return
+        self._pet_place_panel()
+
+    def _pet_key_info(self):
+        """今日经本地代理消耗最高的 Key：(金额, token数, 提示名)。无 Key 数据时给 其他来源。"""
+        today = date.today().isoformat()
+        rows = storage.key_breakdown(today, today)
+        if not rows:
+            return 0.0, 0, "其他来源"
+        r = rows[0]  # 已按费用倒序
+        return r["cost"], r["cache_hit"] + r["cache_miss"] + r["completion"], r["key_hint"]
+
+    def _pet_peak_label(self):
+        """当前计价时段：高峰 -> 梁文峰（红），低谷 -> 梁文谷（绿）。"""
+        try:
+            peak = pricing.is_peak_hour(datetime.now(), self.config)
+        except Exception:
+            peak = False
+        if peak:
+            return "梁文峰（高峰）", C_RED
+        return "梁文谷（低谷）", C_GREEN
+
+    def _refresh_pet_panel(self):
+        """刷新桌宠面板四项内容；面板未打开时跳过。"""
+        try:
+            if not self._pet_panel_open:
+                return
+            cv = self.pet_panel_cv
+            # 1) 当前余额
+            if self.state.get("balance") is not None:
+                cv.itemconfigure(self.pet_p_balance, text=fmt_money(self.state["balance"]),
+                                 fill=C_GREEN)
+            elif self.state.get("balance_error"):
+                cv.itemconfigure(self.pet_p_balance, text="获取失败", fill=C_RED)
+            else:
+                cv.itemconfigure(self.pet_p_balance, text="加载中...", fill=C_SUB)
+            # 2) 今日消耗
+            cost = storage.today_stats()["cost"]
+            cv.itemconfigure(self.pet_p_cost, text=fmt_money(cost), fill=C_ORANGE_DEEP)
+            # 3) 今日当前Key：金额 + Token 数
+            kcost, ktok, khint = self._pet_key_info()
+            cv.itemconfigure(self.pet_p_key,
+                             text=f"{fmt_money_short(kcost)} · {fmt_int(ktok)} tok",
+                             fill=C_BROWN_DARK)
+            # 4) 当前计价时段（梁文峰/梁文谷）
+            label, color = self._pet_peak_label()
+            cv.itemconfigure(self.pet_p_peak, text=label, fill=color)
+        except Exception:
+            pass
+
+    # ---- 事件 ----
+    def _pet_on_hover(self, event):
+        pass  # 预留：悬停可显示提示
+
+    def _pet_on_leave(self, event):
+        pass
+
+    def _pet_press(self, event):
+        self._pet_drag_off = (event.x_root - self.pet_win.winfo_x(),
+                              event.y_root - self.pet_win.winfo_y())
+        self._pet_drag_start = (event.x_root, event.y_root)
+        # 按压 Q 弹：按下压扁（本体微缩），松手回弹，玩偶手感
+        if not self._pet_squish:
+            self._pet_squish = True
+            self._pet_redraw(int(self.pet_size * 0.9))
+
+    def _pet_redraw(self, size: int):
+        """重绘桌宠本体到指定尺寸（按压压扁/松手回弹用）。"""
+        try:
+            img = self._make_pet_image(max(size, 40))
+            if img is not None:
+                self.pet_cv.delete("petbody")
+                self.pet_cv.create_image(self.pet_size / 2, self.pet_size / 2,
+                                         image=img, tags="petbody")
+        except Exception:
+            pass
+
+    def _pet_on_drag(self, event):
+        self.pet_win.geometry(
+            f"+{event.x_root - self._pet_drag_off[0]}"
+            f"+{event.y_root - self._pet_drag_off[1]}")
+
+    def _pet_release(self, event=None):
+        # 按压结束：回弹到原尺寸
+        if self._pet_squish:
+            self._pet_squish = False
+            self._pet_redraw(self.pet_size)
+        # 按下后几乎没移动 => 视为点击：开关信息面板
+        if event is not None and self._pet_drag_start:
+            dx = abs(event.x_root - self._pet_drag_start[0])
+            dy = abs(event.y_root - self._pet_drag_start[1])
+            if dx + dy < 6:
+                self._pet_toggle_panel()
+        self.settings["pet_x"] = self.pet_win.winfo_x()
+        self.settings["pet_y"] = self.pet_win.winfo_y()
+        save_settings(self.settings)
+        if self._pet_panel_open:
+            self._pet_place_panel()  # 桌宠移动后面板跟着挪
+
+    def _pet_menu(self, event):
+        menu = tk.Menu(self.pet_win, tearoff=0)
+        menu.add_command(label="打开主界面", command=self._show_main)
+        menu.add_command(label="立即刷新余额", command=self._refresh_balance_now)
+        menu.add_command(label="隐藏桌宠", command=self._hide_float)
+        menu.add_separator()
+        menu.add_command(label="退出程序", command=self.quit)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     # ---------- 定时刷新 ----------
     def _tick(self):
@@ -1911,9 +2205,11 @@ class App:
             # 圆球悬停中（药丸可见）：刷新金额文字
             if self.float_cv.itemcget(self.float_cost, "state") == "normal":
                 self._set_ball_cost(fmt_money_short(s["cost"]))
-            # 面板打开中：刷新使用额度
+            # 面板打开中：刷新使用额度（悬浮窗面板 / 桌宠面板）
             if self._float_panel_open:
                 self._refresh_float_panel()
+            if getattr(self, "_pet_panel_open", False):
+                self._refresh_pet_panel()
             # token 有新增时，在悬浮窗弹出 "+N" 上浮淡出动画
             new_rows = storage.new_requests_since(self._last_request_id, seconds=8)
             if new_rows:
@@ -1938,6 +2234,8 @@ class App:
         # 面板余额行跟随余额状态
         if self._float_panel_open:
             self._refresh_float_panel()
+        if getattr(self, "_pet_panel_open", False):
+            self._refresh_pet_panel()
         # 余额统计页"当前余额"跟随刷新
         self._update_balance_cur_label()
 
@@ -2303,6 +2601,12 @@ class App:
             self._tray_icon = None
         try:
             self._float_save_pos()  # 保存悬浮球位置（同时把同步游标等一并写入 settings.json）
+        except Exception:
+            pass
+        try:  # 保存桌宠位置
+            if getattr(self, "pet_win", None) is not None:
+                self.settings["pet_x"] = self.pet_win.winfo_x()
+                self.settings["pet_y"] = self.pet_win.winfo_y()
         except Exception:
             pass
         save_settings(self.settings)  # 显式持久化运行设置（含各数据源同步游标）

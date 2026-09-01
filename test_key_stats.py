@@ -52,7 +52,10 @@ try:
     # --- 4) key_breakdown：本月含跨天 ---
     m = now.strftime("%Y-%m")
     bm = storage.key_breakdown(m + "-01", t)
-    assert sum(r["requests"] for r in bm) == 6
+    # 昨天与今天可能跨月（每月 1 号），按实际落在当月内的条数断言，避免日期边界误报
+    same_month = (now - timedelta(days=1)).strftime("%Y-%m") == m
+    expected = 6 if same_month else 4  # 昨天在当月则含两条昨天的记录(6)，否则它们落到上月(4)
+    assert sum(r["requests"] for r in bm) == expected, bm
     print("PASS 4 key_breakdown 本月")
 
     # --- 5) key_daily_stats：近 30 天补零 + 堆叠数据 ---
