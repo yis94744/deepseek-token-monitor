@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.13.1"
 
 
 # ================= 路径与资源 =================
@@ -682,10 +682,15 @@ class App:
         self.chart = tk.Canvas(left, bg=C_CARD, height=210, highlightthickness=1,
                                highlightbackground=C_BROWN_LIGHT)
         self.chart.pack(fill="both", expand=True)
+        # 点击费用柱状图：查看该天的 Token 构成（点击空白处返回今日）
+        self._selected_day = None
+        self._bar_hits = []  # [(x1, x2, date)]：最近一次绘制的柱子命中区
+        self.chart.bind("<Button-1>", self._chart_click)
 
-        # 今日 token 构成
-        tk.Label(left, text="今日 Token 构成", bg=C_BG, fg=C_BROWN_DARK,
-                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(10, 2))
+        # Token 构成（今日；点击上方费用柱后切换为对应日期）
+        self.lbl_token_title = tk.Label(left, text="今日 Token 构成", bg=C_BG,
+                                        fg=C_BROWN_DARK, font=(FONT, 10, "bold"))
+        self.lbl_token_title.pack(anchor="w", pady=(10, 2))
         self.bar = tk.Canvas(left, bg=C_CARD, height=30, highlightthickness=1,
                              highlightbackground=C_BROWN_LIGHT)
         self.bar.pack(fill="x")
@@ -734,12 +739,18 @@ class App:
         return value
 
     def _draw_chart(self):
-        """绘制最近 7 天费用柱状图。"""
-        self._draw_cost_bars(self.chart, storage.past_days_stats(7))
+        """绘制最近 7 天费用柱状图，并记录每根柱的命中区供点击查询。"""
+        self._bar_hits = []
+        self._draw_cost_bars(self.chart, storage.past_days_stats(7),
+                             hit_cb=lambda cx, bw, d: self._bar_hits.append(
+                                 (cx - bw / 2, cx + bw / 2, d)))
 
     @staticmethod
-    def _draw_cost_bars(c, data):
-        """在画布上绘制每日费用柱状图（仪表盘 7 天 / 每日统计 30 天共用）。"""
+    def _draw_cost_bars(c, data, hit_cb=None):
+        """在画布上绘制每日费用柱状图（仪表盘 7 天 / 每日统计 30 天共用）。
+
+        hit_cb(cx, bar_w, date)：每画一根柱回调一次，供调用方记录点击命中区。
+        """
         c.delete("all")
         w = c.winfo_width() or 400
         h = c.winfo_height() or 200
@@ -760,6 +771,8 @@ class App:
             x1, y1 = cx - bar_w / 2, h - pad_b - bh
             x2, y2 = cx + bar_w / 2, h - pad_b
             c.create_rectangle(x1, y1, x2, y2, fill=C_ORANGE, outline="")
+            if hit_cb:
+                hit_cb(cx, bar_w, d["date"])
             # 顶部费用数字
             if d["cost"] > 0:
                 c.create_text(cx, y1 - 9, text=f"{d['cost']:.2f}",
@@ -769,6 +782,34 @@ class App:
                 c.create_text(cx, h - pad_b + 12, text=d["date"][5:],
                               fill=C_SUB, font=(FONT, 8))
         c.create_text(pad_l, 10, anchor="w", text="元/日", fill=C_SUB, font=(FONT, 8))
+
+    def _chart_click(self, event):
+        """点击费用柱状图：命中某根柱子→下方 Token 构成切换为该天；点空白→返回今日。"""
+        try:
+            x = event.x
+            target = None
+            for x1, x2, d in getattr(self, "_bar_hits", []) or []:
+                if x1 <= x <= x2:
+                    target = d
+                    break
+            self._select_day(target)
+        except Exception:
+            pass
+
+    def _select_day(self, day):
+        """把下方 Token 构成区切到指定日期（None=今日），并更新标题。"""
+        self._selected_day = day
+        self._draw_token_bar()
+        if day:
+            try:
+                m, dd = int(day[5:7]), int(day[8:10])
+                label = f"{m}月{dd}日"
+            except Exception:
+                label = day
+            self.lbl_token_title.config(text=f"{label} Token 构成（点击空白返回今日）",
+                                        fg=C_ORANGE_DEEP)
+        else:
+            self.lbl_token_title.config(text="今日 Token 构成", fg=C_BROWN_DARK)
 
     def _refresh_daily_list(self):
         """刷新仪表盘右侧"近 7 天每日总金额"列表（最新在顶，今天高亮）。"""
@@ -792,15 +833,21 @@ class App:
             pass
 
     def _draw_token_bar(self):
-        """绘制今日 token 构成横向比例条。"""
+        """绘制 Token 构成横向比例条：默认今日，点击费用柱后显示所选日期。"""
         c = self.bar
         c.delete("all")
-        s = storage.today_stats()
+        day = getattr(self, "_selected_day", None)
+        if day:
+            s = storage.day_stats(day)
+            empty_text = "该日暂无调用"
+        else:
+            s = storage.today_stats()
+            empty_text = "今日暂无调用"
         w = c.winfo_width() or 300
         h = c.winfo_height() or 28
         total = s["cache_hit"] + s["cache_miss"] + s["completion"]
         if total <= 0:
-            c.create_text(w / 2, h / 2, text="今日暂无调用", fill=C_SUB, font=(FONT, 9))
+            c.create_text(w / 2, h / 2, text=empty_text, fill=C_SUB, font=(FONT, 9))
             return
         parts = [
             (s["cache_hit"], C_BROWN_MID),

@@ -5,6 +5,7 @@
 ## 功能
 
 - **实时统计**：实时记录 token 消耗、输入/输出，精确到每一次请求
+- **仪表盘交互**：点击「最近 7 天费用」柱状图中的某根柱子，下方 Token 构成条即切换为该日的构成（标题同步显示日期）；点击柱状图空白处返回今日
 - **本地代理**：监听 `127.0.0.1:8787`，在本地转发 DeepSeek API 请求并统计
 - **Codex 对话记录**：直接读取 CC Switch 的用量数据库，Codex 对话也能自动记录
 - **YQ Harness 同步**：自动读取 YQ Harness 的会话用量投影缓存（`%APPDATA%\YQ\yq-home\storages\session_projcache.json`，支持 `YQ_HOME` 环境变量），YQ 对话自动统计

@@ -284,6 +284,14 @@ def this_month_breakdown() -> list:
     return _model_breakdown(start, date.today().isoformat())
 
 
+def day_stats(target: str) -> dict:
+    """某一天（YYYY-MM-DD）的用量构成（requests / cache_hit / cache_miss / completion / cost）。
+
+    供仪表盘 7 天柱状图点击查看历史某天的 Token 构成。
+    """
+    return _aggregate(target, target)
+
+
 def save_daily_summary(target_date: date):
     """把某一天的数据固化为日结快照（每天 00:00 自动更新时调用）。"""
     d = target_date.isoformat()
