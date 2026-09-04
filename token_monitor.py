@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.5"
+APP_VERSION = "1.13.6"
 
 
 # ================= 路径与资源 =================
@@ -277,6 +277,56 @@ def fmt_money_short(value) -> str:
         return "¥%.2f" % v
     except Exception:
         return "¥--"
+
+
+def _make_tree_sorter(tree: ttk.Treeview, base_titles: dict, cur_rows: list,
+                      get_value, build_values, total_values=None):
+    """给明细表绑定"点击列头排序"，供每日统计 / 时段统计等页共用。
+
+    base_titles : {列ID: 列名}（插入顺序即列显示顺序）
+    cur_rows    : 外部维护的原始行列表（list，用 cur_rows[:] = 新行 更新）
+    get_value(col, row) : 该列可比较的原始值（数字用 int/float，日期用字符串）
+    build_values(row)   : 该行显示的 values 元组（已格式化的字符串）
+    total_values(rows)  : 可选；返回底部合计行的 values（合计始终沉底不参与排序）
+
+    排序规则：日期列首次点击升序；数值列首次点击降序（先看最大）；再点反向。
+    当前排序列头带方向箭头（▲ 升序 / ▼ 降序）。返回 (state, fill)：
+    state 记录 {col, desc} 供外部读取；fill() 按当前排序重填表格，数据更新后调用。
+    """
+    state = {"col": None, "desc": False}
+
+    def refresh_headings():
+        for col in base_titles:
+            arrow = ""
+            if state["col"] == col:
+                arrow = " ▼" if state["desc"] else " ▲"
+            tree.heading(col, text=base_titles[col] + arrow)
+
+    def fill():
+        rows = cur_rows
+        if state["col"]:
+            key = state["col"]
+            rows = sorted(cur_rows, key=lambda r: get_value(key, r),
+                          reverse=state["desc"])
+        for item in tree.get_children():
+            tree.delete(item)
+        for r in rows:
+            tree.insert("", "end", values=build_values(r))
+        if total_values is not None and rows:
+            tree.insert("", "end", values=total_values(rows), tags=("total",))
+
+    def sort_by(col):
+        if state["col"] == col:
+            state["desc"] = not state["desc"]
+        else:
+            state["col"] = col
+            state["desc"] = col != "date"  # 数值列首击降序（先看最大）；日期列首击升序
+        refresh_headings()
+        fill()
+
+    for col in base_titles:
+        tree.heading(col, command=lambda c=col: sort_by(c))
+    return state, fill
 
 
 def rounded_rect_points(x1, y1, x2, y2, r, steps=10):
@@ -940,8 +990,7 @@ class App:
         tree.tag_configure("total", background="#fdf0d8", foreground=C_ORANGE_DEEP)
         tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        # ---- 点击列头排序：数值列首击降序（先看最大），日期列首击升序；再点反向 ----
-        sort_state = {"col": None, "desc": False}  # desc=True: ▼ 大→小
+        # ---- 点击列头排序（共享组件，见 _make_tree_sorter）----
         cur_rows = []  # 最近一次查询的原始行（排序只作用于表格展示）
 
         def col_value(col, r):
@@ -959,47 +1008,22 @@ class App:
                 return r["tokens"]
             return r["cost"]  # cost
 
-        def refresh_headings():
-            for c in base_titles:
-                arrow = ""
-                if c == sort_state["col"]:
-                    arrow = " ▼" if sort_state["desc"] else " ▲"
-                tree.heading(c, text=base_titles[c] + arrow)
-
-        def fill_tree():
-            for item in tree.get_children():
-                tree.delete(item)
-            rows = cur_rows
-            if sort_state["col"]:
-                rows = sorted(rows, key=lambda r: col_value(sort_state["col"], r),
-                              reverse=sort_state["desc"])
-            for r in rows:
-                tree.insert("", "end", values=(
-                    r["date"], fmt_int(r["requests"]),
+        def build_values(r):
+            return (r["date"], fmt_int(r["requests"]),
                     fmt_int(r["cache_hit"] + r["cache_miss"]),
                     fmt_int(r["completion"]), fmt_int(r["cache_hit"]),
-                    fmt_int(r["tokens"]), fmt_money(r["cost"])))
-            # 底部合计行（始终在最后，不参与排序）
-            if rows:
-                tree.insert("", "end", values=(
-                    "合计", fmt_int(sum(r["requests"] for r in rows)),
+                    fmt_int(r["tokens"]), fmt_money(r["cost"]))
+
+        def total_values(rows):
+            return ("合计", fmt_int(sum(r["requests"] for r in rows)),
                     fmt_int(sum(r["cache_hit"] + r["cache_miss"] for r in rows)),
                     fmt_int(sum(r["completion"] for r in rows)),
                     fmt_int(sum(r["cache_hit"] for r in rows)),
                     fmt_int(sum(r["tokens"] for r in rows)),
-                    fmt_money(sum(r["cost"] for r in rows))), tags=("total",))
+                    fmt_money(sum(r["cost"] for r in rows)))
 
-        def sort_by(col):
-            if sort_state["col"] == col:
-                sort_state["desc"] = not sort_state["desc"]
-            else:
-                sort_state["col"] = col
-                sort_state["desc"] = col != "date"  # 数值列首击降序；日期列首击升序
-            refresh_headings()
-            fill_tree()
-
-        for col in base_titles:
-            tree.heading(col, command=lambda c=col: sort_by(c))
+        sort_state, fill_tree = _make_tree_sorter(
+            tree, base_titles, cur_rows, col_value, build_values, total_values)
 
         def refresh():
             cur_rows[:] = storage.daily_stats()
@@ -1008,7 +1032,6 @@ class App:
             lbl_tok.config(text=f"累计 Token  {fmt_int(sum(r['tokens'] for r in cur_rows))}")
             lbl_cost.config(text=f"累计费用  {fmt_money(sum(r['cost'] for r in cur_rows))}")
             self._draw_cost_bars(chart, storage.past_days_stats(30))
-            refresh_headings()
             fill_tree()
 
         refresh()
@@ -1213,6 +1236,9 @@ class App:
 
         tree = ttk.Treeview(page, columns=("date", "pr", "pt", "pc", "or", "ot", "oc"),
                             show="headings")
+        base_titles = {"date": "日期", "pr": "高峰请求", "pt": "高峰Token",
+                       "pc": "高峰费用", "or": "非高峰请求", "ot": "非高峰Token",
+                       "oc": "非高峰费用"}
         for col, text, width in (("date", "日期", 95), ("pr", "高峰请求", 80),
                                  ("pt", "高峰Token", 95), ("pc", "高峰费用", 90),
                                  ("or", "非高峰请求", 80), ("ot", "非高峰Token", 95),
@@ -1222,12 +1248,36 @@ class App:
         tree.tag_configure("total", background="#fdf0d8", foreground=C_ORANGE_DEEP)
         tree.pack(fill="both", expand=True, padx=12, pady=(8, 12))
 
+        # ---- 点击列头排序（共享组件，见 _make_tree_sorter）----
+        cur_rows = []
+
+        def col_value(col, r):
+            return r["date"] if col == "date" else r[{
+                "pr": "peak_requests", "pt": "peak_tokens", "pc": "peak_cost",
+                "or": "off_requests", "ot": "off_tokens", "oc": "off_cost"}[col]]
+
+        def build_values(r):
+            return (r["date"], fmt_int(r["peak_requests"]), fmt_int(r["peak_tokens"]),
+                    fmt_money(r["peak_cost"]), fmt_int(r["off_requests"]),
+                    fmt_int(r["off_tokens"]), fmt_money(r["off_cost"]))
+
+        def total_values(rows):
+            return ("合计", fmt_int(sum(r["peak_requests"] for r in rows)),
+                    fmt_int(sum(r["peak_tokens"] for r in rows)),
+                    fmt_money(sum(r["peak_cost"] for r in rows)),
+                    fmt_int(sum(r["off_requests"] for r in rows)),
+                    fmt_int(sum(r["off_tokens"] for r in rows)),
+                    fmt_money(sum(r["off_cost"] for r in rows)))
+
+        sort_state, fill_tree = _make_tree_sorter(
+            tree, base_titles, cur_rows, col_value, build_values, total_values)
+
         def refresh():
-            rows = storage.period_stats(config=self.config)  # 全量（倒序），图表复用近 30 天切片
+            cur_rows[:] = storage.period_stats(config=self.config)  # 全量（倒序），图表复用近 30 天切片
             today = date.today().isoformat()
             month = date.today().strftime("%Y-%m")
-            p_today = next((r for r in rows if r["date"] == today), None)
-            mrows = [r for r in rows if r["date"].startswith(month)]
+            p_today = next((r for r in cur_rows if r["date"] == today), None)
+            mrows = [r for r in cur_rows if r["date"].startswith(month)]
 
             def msum(key):
                 return sum(r[key] for r in mrows)
@@ -1240,23 +1290,9 @@ class App:
             self.lbl_off_month.config(text=f"本月非高峰  {fmt_money(msum('off_cost'))}")
             # 图表只需升序的最近 30 天：直接切片，避免对全表再做一次分时段统计
             start30 = (date.today() - timedelta(days=29)).isoformat()
-            chart_rows = [r for r in rows if r["date"] >= start30]
+            chart_rows = [r for r in cur_rows if r["date"] >= start30]
             self._draw_period_bars(chart, list(reversed(chart_rows)))
-            for item in tree.get_children():
-                tree.delete(item)
-            for r in rows:
-                tree.insert("", "end", values=(
-                    r["date"], fmt_int(r["peak_requests"]), fmt_int(r["peak_tokens"]),
-                    fmt_money(r["peak_cost"]), fmt_int(r["off_requests"]),
-                    fmt_int(r["off_tokens"]), fmt_money(r["off_cost"])))
-            if rows:
-                tree.insert("", "end", values=(
-                    "合计", fmt_int(sum(r["peak_requests"] for r in rows)),
-                    fmt_int(sum(r["peak_tokens"] for r in rows)),
-                    fmt_money(sum(r["peak_cost"] for r in rows)),
-                    fmt_int(sum(r["off_requests"] for r in rows)),
-                    fmt_int(sum(r["off_tokens"] for r in rows)),
-                    fmt_money(sum(r["off_cost"] for r in rows))), tags=("total",))
+            fill_tree()
 
         refresh()
         return refresh
