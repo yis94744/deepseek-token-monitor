@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.3"
+APP_VERSION = "1.13.4"
 
 
 # ================= 路径与资源 =================
@@ -498,6 +498,8 @@ class App:
             menu = pystray.Menu(
                 pystray.MenuItem("显示主界面",
                                  lambda: self.root.after(0, self._restore_from_tray)),
+                pystray.MenuItem("检查更新",
+                                 lambda: self.root.after(0, self._tray_check_update)),
                 pystray.MenuItem("退出程序",
                                  lambda: self.root.after(0, self.quit)),
             )
@@ -2757,6 +2759,33 @@ class App:
         """设置页按钮：立即检查更新。"""
         self.state["update"] = {"checked_at": "检查中..."}
         threading.Thread(target=self._run_update_check, daemon=True).start()
+
+    def _tray_check_update(self):
+        """托盘菜单「检查更新」：复用常规检查；结果以弹窗反馈（主窗口藏匿也能看到）。
+
+        发现新版时 _run_update_check 会自行弹出下载询问，这里不再重复提示；
+        已是最新 / 检查失败 则用弹窗告知。
+        """
+        self._check_update_now()
+
+        def poll():
+            try:
+                up = self.state.get("update") or {}
+                if up.get("checked_at") == "检查中...":
+                    self.root.after(500, poll)
+                    return
+                if up.get("available"):
+                    return  # 新版：_run_update_check 已弹更新询问
+                if up.get("error"):
+                    messagebox.showerror("检查更新失败", str(up["error"]), parent=self.root)
+                else:
+                    messagebox.showinfo(
+                        "检查更新", "已是最新版本 " + str(up.get("tag") or APP_VERSION),
+                        parent=self.root)
+            except Exception:
+                pass
+
+        self.root.after(600, poll)
 
     def _rebill_all(self):
         """设置页按钮：按当前峰谷价重算全部历史费用（对账用）。"""
