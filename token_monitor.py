@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.1"
+APP_VERSION = "1.13.2"
 
 
 # ================= 路径与资源 =================
@@ -2536,11 +2536,54 @@ class App:
         self.root.after(1500, self._tick)
 
     def _on_tab_changed(self, event=None):
-        """切换页签时刷新该页数据。"""
+        """切换页签时刷新该页数据；并防止个别 Windows/主题下切页导致窗口意外收缩。
+
+        切换前记住窗口状态，切页布局完成后检查：若窗口被意外缩小（宽或高变小
+        超过阈值）或从最大化掉出，立即还原——保持 UI 原本大小。
+        """
         try:
+            state = self.root.state()
+            before = None
+            if state == "normal":
+                before = self.root.geometry()
+            elif state == "zoomed":
+                before = "zoomed"
             refresh = self._page_refreshers.get(self.nb.index("current"))
             if refresh:
                 refresh()
+
+            if before:
+                # 会话令牌：只有最近一次切页的 guard 链有效，避免旧链误还原
+                seq = self._tab_guard_seq = (getattr(self, "_tab_guard_seq", 0) + 1)
+
+                def guard(seq, tries=5):
+                    if seq != self._tab_guard_seq:
+                        return  # 已有更新的切页，本链作废
+                    try:
+                        cur_state = self.root.state()
+                        if cur_state != "normal":
+                            if cur_state == "zoomed":
+                                return  # 已处于最大化，无需处理
+                            return  # 最小化/其它状态一律不干预
+                        if before == "zoomed":
+                            self.root.state("zoomed")  # 切页导致掉出最大化：恢复
+                            return
+                        geo = self.root.geometry()  # 形如 WxH+X+Y
+                        try:
+                            w0, h0 = (int(v) for v in before.split("+")[0].split("x"))
+                            w1, h1 = (int(v) for v in geo.split("+")[0].split("x"))
+                        except Exception:
+                            return
+                        # 只拦"明显缩小"（≥40px），避免误伤用户主动拖拽
+                        if w1 <= w0 - 40 or h1 <= h0 - 40:
+                            self.root.geometry(before)
+                            return  # 已还原
+                        # 切页引发的收缩可能晚于本检查（WM 尺寸更新滞后），多探几次
+                        if tries > 1:
+                            self.root.after(250, lambda: guard(seq, tries - 1))
+                    except Exception:
+                        pass
+                self.root.after(150, lambda: guard(seq))
         except Exception:
             pass
 
