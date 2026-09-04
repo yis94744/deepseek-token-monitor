@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.8"
+APP_VERSION = "1.13.9"
 
 
 # ================= 路径与资源 =================
@@ -2467,9 +2467,8 @@ class App:
             s = storage.today_stats()
             total = s["cache_hit"] + s["cache_miss"] + s["completion"]
             self.card_tokens.config(text=fmt_int(total))
-            self.card_tokens_sub.config(
-                text=f"输入 {fmt_int(s['cache_hit'] + s['cache_miss'])} · "
-                     f"输出 {fmt_int(s['completion'])} · 命中 {fmt_int(s['cache_hit'])}")
+            # 主面板简洁：只显示今日 token 总量，输入/输出/缓存细分在每日统计页可见
+            self.card_tokens_sub.config(text="")
             self.card_cost.config(text=fmt_money(s["cost"]))
             self.card_cost_sub.config(text=f"共 {fmt_int(s['requests'])} 次调用")
             self.card_requests.config(text=fmt_int(s["requests"]))
