@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.6"
+APP_VERSION = "1.13.7"
 
 
 # ================= 路径与资源 =================
@@ -245,6 +245,7 @@ C_GOLD = "#fed15e"        # 金黄（选中）
 C_ORANGE_DEEP = "#d77522" # 深橙
 C_GREEN = "#6fa36b"       # 余额绿
 C_GREEN_DEEP = "#00e04d"  # 悬停金额亮绿（纯正高饱和绿色，观感清晰）
+C_GREEN_SOFT = "#b4e6a8"  # 浅绿（页签 hover 背景）
 C_PINK = "#ff69b4"        # +N 飘字纯粉
 C_RED = "#d9534f"         # 错误红
 C_TEXT = "#4a2f1d"        # 正文
@@ -511,9 +512,15 @@ class App:
         style.configure("TNotebook", background=C_BG, borderwidth=0)
         style.configure("TNotebook.Tab", background=C_BROWN_LIGHT, foreground="#ffffff",
                         padding=(14, 6), font=(FONT, 10))
+        # 选中页签保持与未选中一致的字体与内边距（防止选中后变小）；
+        # hover（悬停）背景改为浅绿色，选中仍是橙色并置顶优先匹配。
         style.map("TNotebook.Tab",
-                  background=[("selected", C_ORANGE)],
-                  foreground=[("selected", C_BROWN_DARK)])
+                  background=[("selected", C_ORANGE), ("pressed", C_GREEN_SOFT),
+                              ("active", C_GREEN_SOFT)],
+                  foreground=[("selected", C_BROWN_DARK), ("pressed", C_BROWN_DARK),
+                              ("active", C_BROWN_DARK)],
+                  font=[("selected", (FONT, 10))],
+                  padding=[("selected", (14, 6))])
         style.configure("Treeview", background=C_CARD, fieldbackground=C_CARD,
                         foreground=C_TEXT, rowheight=26)
         style.configure("Treeview.Heading", background=C_BROWN_LIGHT, foreground="#ffffff",
