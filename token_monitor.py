@@ -26,6 +26,7 @@ from tkinter import messagebox, ttk
 
 import cc_switch_sync
 import codebuddy_sync
+import dsh_sync
 import pricing
 import proxy_server
 import scheduler
@@ -35,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.12.1"
+APP_VERSION = "1.13.0"
 
 
 # ================= 路径与资源 =================
@@ -105,6 +106,12 @@ DEFAULT_CONFIG = {
     "yq": {
         "enabled": True,
         "projcache_path": "",
+        "sync_interval_seconds": 5,
+    },
+    "dsh": {
+        "enabled": True,
+        "home": "",               # 留空自动定位：DSH_HOME 环境变量 > ~/.dsh
+        "projcache_path": "",     # 留空自动探测：分片目录 session_projcache/ 或旧单文件
         "sync_interval_seconds": 5,
     },
     "codebuddy": {
@@ -313,6 +320,7 @@ class App:
         self.config = self._load_config()
         self.settings = load_settings()
         storage.init_db(DATA_DIR)
+        storage.rebuild_balance_history()  # 按当前口径重算历史余额扣款/充值（幂等，升级后对齐余额走势）
         self._last_request_id = storage.max_request_id()  # 悬浮窗 +N 动效的新增记录游标
         self._popups = 0                                  # 弹窗错位计数
 
@@ -332,12 +340,22 @@ class App:
                          args=(self.config, self.state), daemon=True).start()
         threading.Thread(target=scheduler.run,
                          args=(self.config, self.state, self.stop_event), daemon=True).start()
+        # 组织 Token 排名：每分钟把本机 token 增量上报到所属组织（登录后常驻，无需界面打开）
+        try:
+            import rank_client
+            rank_client.start_reporter()
+        except Exception:
+            pass
         # CC Switch 数据同步线程：只读 CC Switch 本地数据库，不增加 API 链路
         threading.Thread(target=cc_switch_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
         # YQ Harness 数据同步线程：只读 YQ 会话用量投影缓存
         threading.Thread(target=yq_sync.run,
+                         args=(self.config, self.settings, self.state, self.stop_event),
+                         daemon=True).start()
+        # DSH Harness 数据同步线程：只读 DSH/DSH Desktop 会话用量投影缓存（分片目录或旧单文件）
+        threading.Thread(target=dsh_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
         # CodeBuddy 数据同步线程：只读 CodeBuddy 日志中的 Agent 回合用量
@@ -420,6 +438,11 @@ class App:
     def _toggle_yq(self):
         """设置页：开关 YQ Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
         self.config.setdefault("yq", {})["enabled"] = self.yq_var.get()
+        self._save_config()
+
+    def _toggle_dsh(self):
+        """设置页：开关 DSH Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
+        self.config.setdefault("dsh", {})["enabled"] = self.dsh_var.get()
         self._save_config()
 
     def _toggle_codebuddy(self):
@@ -909,8 +932,11 @@ class App:
         self.lbl_bal_cur.grid(row=0, column=0, sticky="w", padx=(0, 16))
         lbl_days = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
         lbl_days.grid(row=0, column=1, sticky="w", padx=(0, 16))
-        tk.Label(top, text="余额每日快照：刷新成功自动记录，一天一条；充值=当日到账，扣款=当日实际消耗", bg=C_BG,
-                 fg=C_SUB, font=(FONT, 8)).grid(row=1, column=0, columnspan=3, sticky="w")
+        tk.Button(top, text="记录充值", command=self._record_recharge_dialog,
+                  bg=C_CARD, fg=C_TEXT, font=(FONT, 9), relief="groove", bd=1,
+                  takefocus=0).grid(row=0, column=3, sticky="e")
+        tk.Label(top, text="余额每日快照：刷新成功自动记录，一天一条；充值=当日到账(可手动补记)，扣款=当日余额实际减少", bg=C_BG,
+                 fg=C_SUB, font=(FONT, 8)).grid(row=1, column=0, columnspan=4, sticky="w")
 
         tk.Label(page, text="近 30 天余额走势", bg=C_BG, fg=C_BROWN_DARK,
                  font=(FONT, 10, "bold")).pack(anchor="w", padx=12, pady=(0, 2))
@@ -955,6 +981,57 @@ class App:
 
         refresh()
         return refresh
+
+    def _record_recharge_dialog(self):
+        """弹出"记录充值"输入框：日期（默认今天）+ 金额，写入 balance_history 并刷新本页。"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("记录充值")
+        dialog.configure(bg=C_BG)
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frm = tk.Frame(dialog, bg=C_BG, padx=16, pady=12)
+        frm.pack()
+        tk.Label(frm, text="充值日期 (YYYY-MM-DD)", bg=C_BG, fg=C_TEXT,
+                 font=(FONT, 9)).grid(row=0, column=0, sticky="w")
+        ent_date = tk.Entry(frm, width=16, font=(FONT, 9))
+        ent_date.grid(row=0, column=1, padx=(8, 0))
+        ent_date.insert(0, date.today().isoformat())
+        tk.Label(frm, text="充值金额 (元，正数=入账，负数=冲正)",
+                 bg=C_BG, fg=C_TEXT, font=(FONT, 9)).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ent_amt = tk.Entry(frm, width=16, font=(FONT, 9))
+        ent_amt.grid(row=1, column=1, padx=(8, 0), pady=(8, 0))
+        tk.Label(frm, text="提示：官方无免登录充值接口，充值只能手动补记；\n保存后会按「扣款=昨日余额-今日余额+充值」重算当日扣款。",
+                 bg=C_BG, fg=C_SUB, font=(FONT, 8), justify="left").grid(
+                 row=2, column=0, columnspan=2, sticky="w", pady=(10, 4))
+
+        def submit():
+            try:
+                d = ent_date.get().strip()
+                datetime.strptime(d, "%Y-%m-%d")  # 校验日期格式
+                amt = float(ent_amt.get().strip())
+            except Exception:
+                messagebox.showwarning("参数错误", "请填写正确的日期(YYYY-MM-DD)与金额(数字)。",
+                                       parent=dialog)
+                return
+            try:
+                storage.record_recharge(d, amt)
+            except Exception as exc:
+                messagebox.showerror("保存失败", f"写入失败：\n{exc}", parent=dialog)
+                return
+            dialog.destroy()
+            # 刷新本页
+            refresh = self._page_refreshers.get(self.nb.index("current"))
+            if refresh:
+                refresh()
+
+        btns = tk.Frame(frm, bg=C_BG)
+        btns.grid(row=3, column=0, columnspan=2, pady=(10, 0))
+        tk.Button(btns, text="取消", command=dialog.destroy, bg=C_CARD, fg=C_TEXT,
+                  font=(FONT, 9), relief="groove", bd=1).pack(side="left", padx=(0, 8))
+        tk.Button(btns, text="保存", command=submit, bg=C_CARD, fg=C_TEXT,
+                  font=(FONT, 9), relief="groove", bd=1).pack(side="left")
+        ent_amt.focus_set()
 
     def _update_balance_cur_label(self):
         """刷新余额统计页"当前余额"（设置页/悬浮窗余额变化时同步）。"""
@@ -1385,7 +1462,7 @@ class App:
         ttk.Button(key_box, text="保存 Key", command=self._save_api_key).pack(
             side="left", padx=(6, 0))
 
-        # 数据源开关（五个数据源全部保留，可分别开关，修改即时生效）
+        # 数据源开关（六个数据源全部保留，可分别开关，修改即时生效）
         tk.Label(left, text="数据源开关:", bg=C_BG, fg=C_BROWN_DARK,
                  font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 4))
         self.proxy_var = tk.BooleanVar(value=bool(self.config.get("proxy_enabled", True)))
@@ -1399,6 +1476,10 @@ class App:
             value=bool((self.config.get("yq") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="YQ Harness 同步", variable=self.yq_var,
                         command=self._toggle_yq).pack(anchor="w", pady=(0, 4))
+        self.dsh_var = tk.BooleanVar(
+            value=bool((self.config.get("dsh") or {}).get("enabled", True)))
+        ttk.Checkbutton(left, text="DSH Harness 同步", variable=self.dsh_var,
+                        command=self._toggle_dsh).pack(anchor="w", pady=(0, 4))
         self.codebuddy_var = tk.BooleanVar(
             value=bool((self.config.get("codebuddy") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="CodeBuddy 同步", variable=self.codebuddy_var,
@@ -1417,6 +1498,9 @@ class App:
         # YQ Harness 数据同步状态
         self.lbl_yqsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
         self.lbl_yqsync.pack(anchor="w", pady=(0, 6))
+        # DSH Harness 数据同步状态
+        self.lbl_dshsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
+        self.lbl_dshsync.pack(anchor="w", pady=(0, 6))
         # CodeBuddy 数据同步状态
         self.lbl_codebuddysync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
         self.lbl_codebuddysync.pack(anchor="w", pady=(0, 6))
@@ -1908,6 +1992,7 @@ class App:
         menu = tk.Menu(self.float_win, tearoff=0)
         menu.add_command(label="打开主界面", command=self._show_main)
         menu.add_command(label="立即刷新余额", command=self._refresh_balance_now)
+        menu.add_command(label="组织排名", command=lambda: self._open_rank())
         menu.add_command(label="隐藏悬浮窗", command=self._hide_float)
         menu.add_separator()
         menu.add_command(label="退出程序", command=self.quit)
@@ -1915,6 +2000,14 @@ class App:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _open_rank(self):
+        """打开"组织 Token 排名"登录/排名对话框。"""
+        try:
+            import rank_ui
+            rank_ui.open_rank_dialog(self.root)
+        except Exception as exc:
+            messagebox.showerror("打开失败", f"组织排名功能加载失败：\n{exc}")
 
     def _show_main(self):
         self.root.deiconify()
@@ -2024,8 +2117,13 @@ class App:
                 pass
 
     def _build_pet_panel(self):
-        """桌宠信息面板：余额 / 今日消耗 / 今日当前Key / 峰谷（梁文峰·梁文谷）。"""
-        w, h = 248, 178
+        """桌宠信息面板：每次只显示一条（点一下切到下一条，循环）。
+
+        五条信息依次为：当前余额 / 今日消耗 / 今日当前Key / 今日Token / 当前计价时段。
+        每条统一居中显示（标签在上、数值在下），上下排布、互不重叠。
+        """
+        self._pet_item = 0  # 0=余额 1=今日消耗 2=今日Key 3=今日Token 4=峰谷
+        w, h = 236, 96
         panel = tk.Toplevel(self.root)
         panel.overrideredirect(True)
         panel.attributes("-topmost", True)
@@ -2034,33 +2132,25 @@ class App:
         except Exception:
             pass
         self.pet_panel = panel
+        self.pet_panel_size = (w, h)
         cv = tk.Canvas(panel, width=w, height=h, highlightthickness=0, bg=C_KEY)
         cv.pack()
         self.pet_panel_cv = cv
         rounded_rect(cv, 2, 2, w - 2, h - 2, 14, fill="#fff8ec", outline=C_ORANGE, width=2)
-        cv.create_text(16, 18, anchor="w", text="噜噜 · 桌宠", fill=C_BROWN_DARK,
-                       font=(FONT, 10, "bold"))
+        # 统一布局：标题在上、数值在下，均居中，互不重叠
+        self.pet_p_title = cv.create_text(w / 2, 30, anchor="n", text="",
+                                          fill=C_SUB, font=(FONT, 9))
+        self.pet_p_value = cv.create_text(w / 2, 56, anchor="n", text="--",
+                                          fill=C_ORANGE_DEEP, font=(MONO, 12, "bold"))
+        # 右上角 ✕：关闭面板（不切换下一条）
         cv.create_text(w - 14, 18, text="✕", fill=C_SUB, font=(FONT, 10, "bold"), tags="close")
         cv.tag_bind("close", "<Button-1>", lambda e: self._pet_toggle_panel(force_close=True))
-        rows = [
-            ("当前余额", "pet_p_balance", C_GREEN),
-            ("今日消耗", "pet_p_cost", C_ORANGE_DEEP),
-            ("今日当前Key", "pet_p_key", C_BROWN_DARK),
-            ("当前计价时段", "pet_p_peak", C_BROWN_DARK),
-        ]
-        y = 44
-        for label, attr, color in rows:
-            cv.create_text(18, y, anchor="w", text=label, fill=C_SUB, font=(FONT, 9))
-            item = cv.create_text(w - 16, y, anchor="e", text="--", fill=color,
-                                  font=(MONO, 9, "bold"))
-            setattr(self, attr, item)
-            y += 33
         panel.withdraw()
 
     def _pet_place_panel(self):
         """把信息面板放到桌宠右侧（贴边防溢出屏幕）并显示、刷新内容。"""
         panel = self.pet_panel
-        w, h = 248, 178
+        w, h = self.pet_panel_size
         bx, by = self.pet_win.winfo_x(), self.pet_win.winfo_y()
         sw, sh = panel.winfo_screenwidth(), panel.winfo_screenheight()
         x = bx + self.pet_size + 8
@@ -2074,11 +2164,17 @@ class App:
         self._refresh_pet_panel()
 
     def _pet_toggle_panel(self, force_close=False):
-        if force_close or self._pet_panel_open:
-            self.pet_panel.withdraw()
-            self._pet_panel_open = False
+        """点击桌宠：面板隐藏则显示当前条；已显示则切到下一条（循环）。"""
+        if force_close or not self._pet_panel_open:
+            if force_close:
+                self.pet_panel.withdraw()
+                self._pet_panel_open = False
+            else:
+                self._pet_place_panel()
             return
-        self._pet_place_panel()
+        # 面板已显示：切到下一条并刷新
+        self._pet_item = (self._pet_item + 1) % 5
+        self._refresh_pet_panel()
 
     def _pet_key_info(self):
         """今日经本地代理消耗最高的 Key：(金额, token数, 提示名)。无 Key 数据时给 其他来源。"""
@@ -2100,30 +2196,43 @@ class App:
         return "梁文谷（低谷）", C_GREEN
 
     def _refresh_pet_panel(self):
-        """刷新桌宠面板四项内容；面板未打开时跳过。"""
+        """按当前项渲染单条信息；面板未打开时跳过。"""
         try:
             if not self._pet_panel_open:
                 return
             cv = self.pet_panel_cv
-            # 1) 当前余额
-            if self.state.get("balance") is not None:
-                cv.itemconfigure(self.pet_p_balance, text=fmt_money(self.state["balance"]),
-                                 fill=C_GREEN)
-            elif self.state.get("balance_error"):
-                cv.itemconfigure(self.pet_p_balance, text="获取失败", fill=C_RED)
-            else:
-                cv.itemconfigure(self.pet_p_balance, text="加载中...", fill=C_SUB)
-            # 2) 今日消耗
-            cost = storage.today_stats()["cost"]
-            cv.itemconfigure(self.pet_p_cost, text=fmt_money(cost), fill=C_ORANGE_DEEP)
-            # 3) 今日当前Key：金额 + Token 数
-            kcost, ktok, khint = self._pet_key_info()
-            cv.itemconfigure(self.pet_p_key,
-                             text=f"{fmt_money_short(kcost)} · {fmt_int(ktok)} tok",
-                             fill=C_BROWN_DARK)
-            # 4) 当前计价时段（梁文峰/梁文谷）
-            label, color = self._pet_peak_label()
-            cv.itemconfigure(self.pet_p_peak, text=label, fill=color)
+            item = self._pet_item
+            title = ""
+            value = ""
+            color = C_ORANGE_DEEP
+            if item == 0:      # 当前余额
+                title = "当前余额"
+                if self.state.get("balance") is not None:
+                    value = fmt_money(self.state["balance"])
+                    color = C_GREEN
+                elif self.state.get("balance_error"):
+                    value = "获取失败"
+                    color = C_RED
+                else:
+                    value = "加载中..."
+                    color = C_SUB
+            elif item == 1:    # 今日消耗
+                title = "今日消耗"
+                value = fmt_money(storage.today_stats()["cost"])
+            elif item == 2:    # 今日当前Key：只显示 Key 提示名（不含金额/Token）
+                _kcost, _ktok, khint = self._pet_key_info()
+                title = "今日当前Key"
+                value = khint or "其他来源"
+                color = C_BROWN_DARK
+            elif item == 3:    # 今日Token：数量
+                title = "今日 Token 消耗"
+                s = storage.today_stats()
+                value = "%s tok" % fmt_int(s["cache_hit"] + s["cache_miss"] + s["completion"])
+            else:              # 当前计价时段（梁文峰/梁文谷）
+                title = "当前计价时段"
+                value, color = self._pet_peak_label()
+            cv.itemconfigure(self.pet_p_title, text=title)
+            cv.itemconfigure(self.pet_p_value, text=value, fill=color)
         except Exception:
             pass
 
@@ -2180,6 +2289,7 @@ class App:
         menu = tk.Menu(self.pet_win, tearoff=0)
         menu.add_command(label="打开主界面", command=self._show_main)
         menu.add_command(label="立即刷新余额", command=self._refresh_balance_now)
+        menu.add_command(label="组织排名", command=lambda: self._open_rank())
         menu.add_command(label="隐藏桌宠", command=self._hide_float)
         menu.add_separator()
         menu.add_command(label="退出程序", command=self.quit)
@@ -2322,6 +2432,19 @@ class App:
                 self.lbl_yqsync.config(
                     text=f"YQ Harness 同步：运行中 · 累计导入 {fmt_int(yq.get('total_added', 0))} 条"
                          f" · {yq.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.75) DSH Harness 数据同步状态
+        if hasattr(self, "lbl_dshsync"):
+            dsh = self.state.get("dsh_sync")
+            if not dsh or not dsh.get("enabled"):
+                self.lbl_dshsync.config(text="DSH Harness 同步：未启用", fg=C_SUB)
+            elif dsh.get("error"):
+                self.lbl_dshsync.config(
+                    text="DSH Harness 同步：读取失败 " + str(dsh["error"]), fg=C_RED)
+            else:
+                self.lbl_dshsync.config(
+                    text=f"DSH Harness 同步：运行中 · 累计导入 {fmt_int(dsh.get('total_added', 0))} 条"
+                         f" · {dsh.get('last_time', '')}", fg=C_GREEN)
 
         # 4.8) CodeBuddy 数据同步状态
         if hasattr(self, "lbl_codebuddysync"):

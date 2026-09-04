@@ -30,6 +30,17 @@
       "session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx": "deepseek-v4-pro"
     }
   },
+  "dsh": {
+    "enabled": true,
+    "home": "",
+    "projcache_path": "",
+    "sync_interval_seconds": 5,
+    "api_base": "http://127.0.0.1:3080",
+    "model_refresh_seconds": 300,
+    "models": {
+      "session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx": "deepseek-v4-pro"
+    }
+  },
   "codebuddy": {
     "enabled": true,
     "logs_dir": "",

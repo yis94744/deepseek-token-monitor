@@ -113,6 +113,11 @@ def init_db(data_dir: str):
                     conn.execute("ALTER TABLE balance_history ADD COLUMN %s REAL NOT NULL DEFAULT 0" % col)
                 except sqlite3.OperationalError:
                     pass  # 列已存在，忽略
+            # v1.12.x：标记某日充值为手动补记（rebuild 时不覆盖），老数据默认 0
+            try:
+                conn.execute("ALTER TABLE balance_history ADD COLUMN manual_recharge INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # 列已存在，忽略
             # 旧库迁移（v1.11.0）：requests 增加入库时间列（悬浮窗+N弹窗用），老数据回填为 created_at
             try:
                 conn.execute("ALTER TABLE requests ADD COLUMN imported_at TEXT")
@@ -219,6 +224,7 @@ def _source_breakdown(date_from: str, date_to: str) -> list:
                 " WHEN source_key LIKE 'cb:%' THEN 'CodeBuddy' "
                 " WHEN source_key LIKE 'wb:%' THEN 'WorkBuddy' "
                 " WHEN source_key LIKE 'yq:%' THEN 'YQ Harness' "
+                " WHEN source_key LIKE 'dsh:%' THEN 'DSH Harness' "
                 " WHEN source_key LIKE 'cc:%' THEN 'CC Switch' "
                 " ELSE '本地代理' END src, "
                 "COUNT(*), COALESCE(SUM(prompt_cache_hit_tokens),0), "
@@ -413,39 +419,158 @@ def daily_stats(days: int = None) -> list:
 def save_balance_snapshot(balance: float):
     """记录当日账户余额快照（每天一条，同一天后写的覆盖），供余额每日统计使用。
 
-    同步写入当日扣款（usage_cost，来自 requests 真实消耗流水）与充值（recharge）：
-    - 扣款：当日所有请求 cost 之和，精确反映当天用了多少。
+    同步写入当日扣款（usage_cost）与充值（recharge）：
+    - 扣款：取「本地统计到的当日消耗」与「余额实际减少量」两者的较大值——
+      本地 requests 只覆盖已接入的数据源（代理 / CC Switch / YQ / CodeBuddy /
+      WorkBuddy），直接走官方接口或其他未接入工具的消耗不会入库。若用纯本地
+      统计，扣款会远小于真实余额下降（对不上）。因此扣款以「昨日余额 - 今日余额」
+      为准（无充值时的真实扣款），本地统计只作为下界，未记录部分补足差额。
     - 充值：外部充值无法直接读取，用余额净变动反推还原——
-      充值 = (当日余额 - 昨日余额) + 当日扣款。
-      这样即使当天"先充值后消耗"，也能还原出真实充值额，而不会像以前那样
-      被使用量污染（余额净变动=充值-扣款，加回扣款即还原）。
+      充值 = (当日余额 - 昨日余额) + 当日扣款（不为负）。
+      充值日余额上升时扣款回落为本地消耗，充值即还原；未充值日余额下降时
+      扣款=余额减少，充值=0。
     """
     today = date.today().isoformat()
     now = datetime.now().isoformat(timespec="seconds")
     balance = float(balance)
-    usage_cost = _aggregate(today, today)["cost"]  # 当日真实消耗
-    # 昨日余额（取最近一条早于今天的快照；无则按首次记录，无历史时充值记为 0）
+    local_cost = _aggregate(today, today)["cost"]  # 本地统计到的当日消耗（下界）
+    # 昨日余额 + 今日是否已有手动充值标记（取最近一条早于今天的快照；无则按首次记录）
     with _lock:
         conn = _conn()
         try:
             prev = conn.execute(
                 "SELECT balance FROM balance_history WHERE date < ? ORDER BY date DESC LIMIT 1",
                 (today,)).fetchone()
+            cur_row = conn.execute(
+                "SELECT manual_recharge, recharge FROM balance_history WHERE date = ?",
+                (today,)).fetchone()
         finally:
             conn.close()
     prev_balance = prev[0] if prev else balance
-    recharge = max(0.0, (balance - prev_balance) + usage_cost)  # 反推充值，不为负
+    balance_drop = max(0.0, prev_balance - balance)     # 余额实际减少量
+    if cur_row and cur_row[0]:
+        # 今日已手动补记充值：保留手动充值额，扣款=昨日余额-今日余额+充值
+        recharge = cur_row[1] or 0.0
+        usage_cost = max(local_cost, balance_drop + recharge)
+    else:
+        # 自动：扣款=实际余额减少（本地统计兜底），充值用余额净变动反推
+        usage_cost = max(local_cost, balance_drop)
+        recharge = max(0.0, (balance - prev_balance) + usage_cost)
 
     with _lock:
         conn = _conn()
         try:
             conn.execute(
-                "INSERT INTO balance_history(date, balance, recharge, usage_cost, updated_at) "
-                "VALUES(?,?,?,?,?) "
+                "INSERT INTO balance_history(date, balance, recharge, usage_cost, updated_at, manual_recharge) "
+                "VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(date) DO UPDATE SET balance=excluded.balance, "
                 "recharge=excluded.recharge, usage_cost=excluded.usage_cost, "
                 "updated_at=excluded.updated_at",
-                (today, balance, round(recharge, 6), round(usage_cost, 6), now))
+                (today, balance, round(recharge, 6), round(usage_cost, 6), now,
+                 (cur_row[0] if cur_row else 0)))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def rebuild_balance_history():
+    """按当前口径重算 balance_history 中每一天的扣款与充值（按日期升序）。
+
+    供 v1.12.x 升级后一次性修复历史数据：老数据（尤其 v1.11.0 迁移时补默认 0、
+    或纯本地统计导致的扣款远小于真实余额下降）无法自动跟上新公式，这里逐天
+    用「扣款 = max(本地当日消耗, 昨日余额-今日余额)」重算并覆盖 usage_cost 与
+    recharge，使余额统计页与余额走势完全对齐。可安全重复调用（幂等）。
+    """
+    with _lock:
+        conn = _conn()
+        try:
+            rows = conn.execute(
+                "SELECT date, balance, manual_recharge FROM balance_history ORDER BY date ASC").fetchall()
+        finally:
+            conn.close()
+    # 预取每日本地消耗（requests 表，按 date 分组）
+    local = {}
+    with _lock:
+        conn = _conn()
+        try:
+            for r in conn.execute(
+                    "SELECT date, COALESCE(SUM(cost),0) FROM requests GROUP BY date"):
+                local[r[0]] = float(r[1])
+        finally:
+            conn.close()
+    prev_balance = None
+    with _lock:
+        conn = _conn()
+        try:
+            for d, bal, manual in rows:
+                bal = float(bal)
+                local_cost = local.get(d, 0.0)
+                if prev_balance is None:
+                    # 首日：无昨日参照，扣款=本地当日消耗，充值记为 0
+                    usage_cost = local_cost
+                    recharge = 0.0
+                else:
+                    balance_drop = max(0.0, prev_balance - bal)
+                    usage_cost = max(local_cost, balance_drop)
+                    recharge = max(0.0, (bal - prev_balance) + usage_cost)
+                if not manual:  # 手动补记充值的日子保留用户填的值，不重算
+                    conn.execute(
+                        "UPDATE balance_history SET recharge=?, usage_cost=? WHERE date=?",
+                        (round(recharge, 6), round(usage_cost, 6), d))
+                prev_balance = bal
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def record_recharge(date_str: str, amount: float):
+    """手动记录某日充值（amount>0=入账，<0=冲正/扣除），并据此重算该日扣款。
+
+    外部充值软件无法自动读取，只能由用户手动填写。写入 balance_history 该日的
+    recharge，再按「余额变动 = 充值 - 扣款」重算该日真实扣款：
+        扣款 = max(本地当日消耗, 昨日余额 - 今日余额 + 充值)
+    这样充值日不再把充值误算成扣款，扣款反映真实总消耗。
+    若该日还没有余额快照，则仅记录充值额，等后续余额刷新时按新口径合并。
+    """
+    amount = float(amount)
+    with _lock:
+        conn = _conn()
+        try:
+            row = conn.execute(
+                "SELECT date, balance FROM balance_history WHERE date = ?",
+                (date_str,)).fetchone()
+            prev = conn.execute(
+                "SELECT balance FROM balance_history WHERE date < ? ORDER BY date DESC LIMIT 1",
+                (date_str,)).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        # 该日无快照：先记录充值，余额快照稍后补
+        now = datetime.now().isoformat(timespec="seconds")
+        with _lock:
+            conn = _conn()
+            try:
+                conn.execute(
+                    "INSERT INTO balance_history(date, balance, recharge, usage_cost, updated_at, "
+                    "manual_recharge) VALUES(?,0,?,0,?,1) "
+                    "ON CONFLICT(date) DO UPDATE SET recharge=excluded.recharge, "
+                    "updated_at=excluded.updated_at",
+                    (date_str, round(amount, 6), now))
+                conn.commit()
+            finally:
+                conn.close()
+        return
+    balance = float(row[1])
+    prev_balance = prev[0] if prev else balance
+    local_cost = _aggregate(date_str, date_str)["cost"]
+    # 余额变动 = 充值 - 扣款  => 扣款 = 昨日余额 - 今日余额 + 充值（兜底不小于本地消耗，不为负）
+    usage_cost = max(0.0, max(local_cost, (prev_balance - balance) + amount))
+    with _lock:
+        conn = _conn()
+        try:
+            conn.execute(
+                "UPDATE balance_history SET recharge=?, usage_cost=?, manual_recharge=1 WHERE date=?",
+                (round(amount, 6), round(usage_cost, 6), date_str))
             conn.commit()
         finally:
             conn.close()
@@ -666,6 +791,14 @@ def yq_cumulative(sid: str):
     去重键用累计总量本身，同一总量只入库一次。前缀为 yq:。
     """
     return _cumulative("yq", sid)
+
+
+def dsh_cumulative(sid: str):
+    """返回某 DSH Harness 会话已入库的累计总量 (hit, miss, comp)，无记录则 None。
+
+    与 yq_cumulative 同口径（无状态差分、总量去重），前缀为 dsh:。
+    """
+    return _cumulative("dsh", sid)
 
 
 def _cumulative(prefix: str, sid: str):
