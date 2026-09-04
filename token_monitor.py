@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.4"
+APP_VERSION = "1.13.5"
 
 
 # ================= 路径与资源 =================
@@ -929,6 +929,8 @@ class App:
 
         tree = ttk.Treeview(page, columns=("date", "req", "in", "out", "hit", "tok", "cost"),
                             show="headings")
+        base_titles = {"date": "日期", "req": "请求数", "in": "输入", "out": "输出",
+                       "hit": "命中", "tok": "Token 合计", "cost": "费用"}
         for col, text, width in (("date", "日期", 100), ("req", "请求数", 70),
                                  ("in", "输入", 90), ("out", "输出", 90),
                                  ("hit", "命中", 90), ("tok", "Token 合计", 110),
@@ -938,22 +940,46 @@ class App:
         tree.tag_configure("total", background="#fdf0d8", foreground=C_ORANGE_DEEP)
         tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        def refresh():
-            rows = storage.daily_stats()
-            lbl_days.config(text=f"记录天数  {fmt_int(len(rows))}")
-            lbl_req.config(text=f"累计请求  {fmt_int(sum(r['requests'] for r in rows))}")
-            lbl_tok.config(text=f"累计 Token  {fmt_int(sum(r['tokens'] for r in rows))}")
-            lbl_cost.config(text=f"累计费用  {fmt_money(sum(r['cost'] for r in rows))}")
-            self._draw_cost_bars(chart, storage.past_days_stats(30))
+        # ---- 点击列头排序：数值列首击降序（先看最大），日期列首击升序；再点反向 ----
+        sort_state = {"col": None, "desc": False}  # desc=True: ▼ 大→小
+        cur_rows = []  # 最近一次查询的原始行（排序只作用于表格展示）
+
+        def col_value(col, r):
+            if col == "date":
+                return r["date"]
+            if col == "req":
+                return r["requests"]
+            if col == "in":
+                return r["cache_hit"] + r["cache_miss"]
+            if col == "out":
+                return r["completion"]
+            if col == "hit":
+                return r["cache_hit"]
+            if col == "tok":
+                return r["tokens"]
+            return r["cost"]  # cost
+
+        def refresh_headings():
+            for c in base_titles:
+                arrow = ""
+                if c == sort_state["col"]:
+                    arrow = " ▼" if sort_state["desc"] else " ▲"
+                tree.heading(c, text=base_titles[c] + arrow)
+
+        def fill_tree():
             for item in tree.get_children():
                 tree.delete(item)
+            rows = cur_rows
+            if sort_state["col"]:
+                rows = sorted(rows, key=lambda r: col_value(sort_state["col"], r),
+                              reverse=sort_state["desc"])
             for r in rows:
                 tree.insert("", "end", values=(
                     r["date"], fmt_int(r["requests"]),
                     fmt_int(r["cache_hit"] + r["cache_miss"]),
                     fmt_int(r["completion"]), fmt_int(r["cache_hit"]),
                     fmt_int(r["tokens"]), fmt_money(r["cost"])))
-            # 底部合计行：每日总金额一览
+            # 底部合计行（始终在最后，不参与排序）
             if rows:
                 tree.insert("", "end", values=(
                     "合计", fmt_int(sum(r["requests"] for r in rows)),
@@ -962,6 +988,28 @@ class App:
                     fmt_int(sum(r["cache_hit"] for r in rows)),
                     fmt_int(sum(r["tokens"] for r in rows)),
                     fmt_money(sum(r["cost"] for r in rows))), tags=("total",))
+
+        def sort_by(col):
+            if sort_state["col"] == col:
+                sort_state["desc"] = not sort_state["desc"]
+            else:
+                sort_state["col"] = col
+                sort_state["desc"] = col != "date"  # 数值列首击降序；日期列首击升序
+            refresh_headings()
+            fill_tree()
+
+        for col in base_titles:
+            tree.heading(col, command=lambda c=col: sort_by(c))
+
+        def refresh():
+            cur_rows[:] = storage.daily_stats()
+            lbl_days.config(text=f"记录天数  {fmt_int(len(cur_rows))}")
+            lbl_req.config(text=f"累计请求  {fmt_int(sum(r['requests'] for r in cur_rows))}")
+            lbl_tok.config(text=f"累计 Token  {fmt_int(sum(r['tokens'] for r in cur_rows))}")
+            lbl_cost.config(text=f"累计费用  {fmt_money(sum(r['cost'] for r in cur_rows))}")
+            self._draw_cost_bars(chart, storage.past_days_stats(30))
+            refresh_headings()
+            fill_tree()
 
         refresh()
         return refresh
