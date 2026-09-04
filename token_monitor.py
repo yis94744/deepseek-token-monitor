@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.2"
+APP_VERSION = "1.13.3"
 
 
 # ================= 路径与资源 =================
@@ -724,9 +724,6 @@ class App:
                          font=(MONO, 8, "bold"))
             c.pack(side="right", padx=10)
             self.daily_rows.append((d, c))
-
-        mascot = self._keep_image(_res("mascot.png"), subsample=4)  # 300 -> 75
-        tk.Label(right, image=mascot, bg=C_BG).pack(side="bottom", pady=(8, 0))
 
     def _make_small_card(self, parent, title):
         card = tk.Frame(parent, bg=C_CARD, highlightbackground=C_GOLD,
