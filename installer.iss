@@ -1,7 +1,7 @@
 [Setup]
 AppId={{A7E33F1C-4D2B-4C6E-9F8B-2B5A0C77A8D1}
 AppName=水豚噜噜 DeepSeek 用量监控
-AppVersion=1.13.7
+AppVersion=1.13.8
 AppPublisher=CapybaraMonitor
 DefaultDirName={userpf}\DeepSeekTokenMonitor
 DefaultGroupName=水豚噜噜 DeepSeek 用量监控

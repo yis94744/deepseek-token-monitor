@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.7"
+APP_VERSION = "1.13.8"
 
 
 # ================= 路径与资源 =================
@@ -525,9 +525,34 @@ class App:
                         foreground=C_TEXT, rowheight=26)
         style.configure("Treeview.Heading", background=C_BROWN_LIGHT, foreground="#ffffff",
                         font=(FONT, 9, "bold"))
+        # 列头（日期/请求数/费用…）与标准按钮：悬停/按下变为浅绿色、深色字
+        style.map("Treeview.Heading",
+                  background=[("active", C_GREEN_SOFT), ("pressed", C_GREEN_SOFT)],
+                  foreground=[("active", C_BROWN_DARK), ("pressed", C_BROWN_DARK)])
         style.map("Treeview", background=[("selected", C_GOLD)])
         style.configure("TCheckbutton", background=C_BG, foreground=C_TEXT, font=(FONT, 10))
         style.configure("TButton", font=(FONT, 9))
+        style.map("TButton",
+                  background=[("pressed", C_GREEN_SOFT), ("active", C_GREEN_SOFT)],
+                  foreground=[("pressed", C_BROWN_DARK), ("active", C_BROWN_DARK)])
+        # 自定义 tk.Button（非 ttk）悬停也变浅绿：bind_class 全局覆盖一次
+        def _btn_hover_enter(event):
+            w = event.widget
+            try:
+                w._orig_bg = w.cget("background")
+                w._orig_fg = w.cget("foreground")
+                w.config(background=C_GREEN_SOFT, foreground=C_BROWN_DARK)
+            except Exception:
+                pass
+        def _btn_hover_leave(event):
+            w = event.widget
+            try:
+                w.config(background=getattr(w, "_orig_bg", C_CARD),
+                         foreground=getattr(w, "_orig_fg", C_TEXT))
+            except Exception:
+                pass
+        self.root.bind_class("Button", "<Enter>", _btn_hover_enter)
+        self.root.bind_class("Button", "<Leave>", _btn_hover_leave)
 
     def _keep_image(self, path: str, subsample: int = 1) -> tk.PhotoImage:
         """加载图片并保留引用；gif 显示第一帧。"""
