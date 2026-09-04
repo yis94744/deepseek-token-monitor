@@ -63,15 +63,19 @@ def check_latest() -> dict:
             data = json.loads(resp.read().decode("utf-8"))
         tag = data.get("tag_name") or ""
         setup_url = ""
+        portable_url = ""
         for asset in data.get("assets") or []:
-            if str(asset.get("name") or "").lower() == "deepseektokenmonitor-setup.exe":
+            name = str(asset.get("name") or "").lower()
+            if name == "deepseektokenmonitor-setup.exe":
                 setup_url = asset.get("browser_download_url") or ""
-                break
+            elif name == "deepseektokenmonitor.exe":
+                portable_url = asset.get("browser_download_url") or ""
         return {"tag": tag,
                 "url": data.get("html_url") or (RELEASE_URL % tag),
                 "name": data.get("name") or "",
                 "published": data.get("published_at") or "",
-                "setup_url": setup_url}
+                "setup_url": setup_url,
+                "portable_url": portable_url}
     except Exception as exc:
         _log("检查失败(静默): %s" % exc)
         return None

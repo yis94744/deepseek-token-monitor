@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.9"
+APP_VERSION = "1.13.10"
 
 
 # ================= 路径与资源 =================
@@ -2737,6 +2737,7 @@ class App:
             self.state["update"] = {"tag": info["tag"], "url": info["url"],
                                     "name": info.get("name") or "",
                                     "setup_url": info.get("setup_url") or "",
+                                    "portable_url": info.get("portable_url") or "",
                                     "checked_at": datetime.now().strftime("%H:%M:%S")}
             if updater.is_newer(info["tag"], updater.parse_version(APP_VERSION)):
                 self.state["update"]["available"] = True
@@ -2773,10 +2774,14 @@ class App:
             pass
 
     def _download_update(self, info: dict):
-        """下载新版本安装包（带进度条），完成后自动退出并安装。"""
-        setup_url = (info or {}).get("setup_url")
+        """下载新版便携版 exe（带进度条），完成后本地覆盖并自动重启。
+
+        走便携版本地更新：直接覆盖当前程序所在目录的 exe，绕开安装器
+        （部分环境下安装器的 MoveFile 会被安全软件拦截导致更新失败）。
+        """
+        url = (info or {}).get("portable_url") or (info or {}).get("setup_url")
         tag = (info or {}).get("tag", "")
-        if not setup_url:
+        if not url:
             self._open_update_page()  # 拿不到直链时退回打开下载页
             return
         try:
@@ -2785,7 +2790,7 @@ class App:
             os.makedirs(update_dir, exist_ok=True)
         except Exception:
             update_dir = os.path.join(DATA_DIR, "_update")
-        dest = os.path.join(update_dir, "DeepSeekTokenMonitor-Setup-%s.exe" % tag.replace("v", ""))
+        dest = os.path.join(update_dir, "DeepSeekTokenMonitor-%s.exe" % tag.replace("v", ""))
         cancel_ev = threading.Event()
 
         dlg = tk.Toplevel(self.root)
@@ -2826,7 +2831,7 @@ class App:
 
         def work():
             try:
-                updater.download(setup_url, dest, on_progress, cancel_ev)
+                updater.download(url, dest, on_progress, cancel_ev)
                 if cancel_ev.is_set():
                     return
                 def ready():
@@ -2846,21 +2851,27 @@ class App:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _install_update(self, setup_path: str):
-        """退出当前程序，由升级脚本静默安装新版本（安装完成后自动启动新版覆盖旧版）。"""
+    def _install_update(self, new_exe: str):
+        """退出当前程序，由后台脚本把新版便携 exe 就地覆盖并自动重启。
+
+        流程：等旧程序完全退出 → 用新 exe 覆盖当前程序所在目录的同名 exe →
+        重新启动该 exe → 清理临时文件。全程用文件复制，绕开安装器。
+        """
         try:
-            update_dir = os.path.dirname(setup_path)
+            target_dir = os.path.dirname(os.path.abspath(sys.executable))
+            target_exe = os.path.join(target_dir, "DeepSeekTokenMonitor.exe")
+            update_dir = os.path.dirname(new_exe)
             script = os.path.join(update_dir, "run_update.ps1")
             with open(script, "w", encoding="utf-8") as f:
                 f.write("$ErrorActionPreference = 'SilentlyContinue'\n")
-                f.write("# 等待旧程序完全退出，释放 exe 占用，再执行静默安装\n")
+                f.write("# 等旧程序完全退出，释放 exe 占用，再就地覆盖并重启\n")
                 f.write("for ($i = 0; $i -lt 60; $i++) {\n")
                 f.write("  if (-not (Get-Process DeepSeekTokenMonitor -ErrorAction "
                         "SilentlyContinue)) { break }\n")
                 f.write("  Start-Sleep -Seconds 1\n}\n")
-                f.write("Start-Process -FilePath '%s' "
-                        "-ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait\n"
-                        % setup_path)
+                f.write("Copy-Item -Path '%s' -Destination '%s' -Force\n"
+                        % (new_exe, target_exe))
+                f.write("Start-Process -FilePath '%s'\n" % target_exe)
                 f.write("Remove-Item -Path '%s' -Recurse -Force\n" % update_dir)
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
