@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.16"
+APP_VERSION = "1.13.17"
 
 
 # ================= 路径与资源 =================
@@ -529,7 +529,9 @@ class App:
         style.map("Treeview.Heading",
                   background=[("active", C_GREEN_SOFT), ("pressed", C_GREEN_SOFT)],
                   foreground=[("active", C_BROWN_DARK), ("pressed", C_BROWN_DARK)])
-        style.map("Treeview", background=[("selected", C_GOLD)])
+        # 表格选中行：背景浅绿、深色字（与列头/按钮 hover 统一）
+        style.map("Treeview", background=[("selected", C_GREEN_SOFT)],
+                  foreground=[("selected", C_BROWN_DARK)])
         style.configure("TCheckbutton", background=C_BG, foreground=C_TEXT, font=(FONT, 10))
         style.configure("TButton", font=(FONT, 9))
         style.map("TButton",
