@@ -9,7 +9,12 @@
 a = Analysis(
     ['token_monitor.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        # 打包 VC++ 运行库：目标机无 VC++ Redistributable 也能启动（否则 python313.dll 加载失败）
+        ('C:/Windows/System32/vcruntime140.dll', '.'),
+        ('C:/Windows/System32/vcruntime140_1.dll', '.'),
+        ('C:/Windows/System32/msvcp140.dll', '.'),
+    ],
     datas=[('assets', 'assets')],
     hiddenimports=['rank_client', 'rank_ui'],
     hookspath=[],

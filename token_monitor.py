@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.15"
+APP_VERSION = "1.13.16"
 
 
 # ================= 路径与资源 =================
