@@ -18,3 +18,6 @@ _err.txt
 cloud_rank/test_rank.db
 cloud_rank_deploy.zip
 *.log
+
+# 部署工具（含服务器凭据，勿提交）
+deploy_tools.py
