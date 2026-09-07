@@ -15,7 +15,7 @@ rank_client.py — DeepSeekTokenMonitor 的云端 Token 排名客户端（全平
     上报响应中的榜单缓存在内存供 UI 读取；未登录/未启用时静默跳过
   - 只上报 token 数字；不上报任何对话内容 / API Key / 余额等敏感信息
 
-服务器地址：settings.rank.server，默认 http://106.52.172.73:8000（部署后确认端口/域名）。
+服务器地址：settings.rank.server，默认 http://106.52.172.73（标准 80 端口，全网可达）。
 """
 import json
 import os
@@ -23,7 +23,7 @@ import time
 
 _APP_DIR = os.path.join(os.environ.get("APPDATA", ""), "DeepSeekTokenMonitor")
 _SETTINGS_PATH = os.path.join(_APP_DIR, "settings.json")
-_DEFAULT_SERVER = "http://106.52.172.73:8000"
+_DEFAULT_SERVER = "http://106.52.172.73"
 _REPORT_INTERVAL = 30  # 秒：半分钟上报一次并同步榜单
 
 
@@ -131,7 +131,15 @@ def clear_session():
 
 def make_client():
     s = load_session()
-    c = RankClient(base=s.get("server"), token=s.get("token", ""))
+    server = s.get("server")
+    # 旧会话迁移：服务端已从 :8000 切到标准 80 端口，历史会话地址自动升级
+    if server and ("106.52.172.73:8000" in server or ":8000" in str(server)):
+        server = _DEFAULT_SERVER
+        sess = load_session()
+        sess["server"] = server
+        save_session(sess)
+        s = sess
+    c = RankClient(base=server, token=s.get("token", ""))
     c.user = s.get("user")
     return c
 
