@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.17"
+APP_VERSION = "1.13.18"
 
 
 # ================= 路径与资源 =================
@@ -513,14 +513,16 @@ class App:
         style.configure("TNotebook.Tab", background=C_BROWN_LIGHT, foreground="#ffffff",
                         padding=(14, 6), font=(FONT, 10))
         # 选中页签保持与未选中一致的字体与内边距（防止选中后变小）；
-        # hover（悬停）背景改为浅绿色，选中仍是橙色并置顶优先匹配。
+        # hover（悬停）背景改为浅绿色，选中仍是橙色并置顶优先匹配；
+        # focuscolor 与当前背景同色：去掉选中页签的虚线焦点圈。
         style.map("TNotebook.Tab",
                   background=[("selected", C_ORANGE), ("pressed", C_GREEN_SOFT),
                               ("active", C_GREEN_SOFT)],
                   foreground=[("selected", C_BROWN_DARK), ("pressed", C_BROWN_DARK),
                               ("active", C_BROWN_DARK)],
                   font=[("selected", (FONT, 10))],
-                  padding=[("selected", (14, 6))])
+                  padding=[("selected", (14, 6))],
+                  focuscolor=[("selected", C_ORANGE), ("!selected", C_BROWN_LIGHT)])
         style.configure("Treeview", background=C_CARD, fieldbackground=C_CARD,
                         foreground=C_TEXT, rowheight=26)
         style.configure("Treeview.Heading", background=C_BROWN_LIGHT, foreground="#ffffff",
