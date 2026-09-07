@@ -13,3 +13,8 @@ README.txt
 CONTEXT_SUMMARY.md
 _err.txt
 .tmp/
+
+# 云排名/部署临时
+cloud_rank/test_rank.db
+cloud_rank_deploy.zip
+*.log

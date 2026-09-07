@@ -154,12 +154,17 @@ class RankDialog(tk.Toplevel):
             try:
                 try:
                     self.client.login(email, password)
-                except rc.RankError as exc:
-                    # 登录失败（未注册/密码错都会 401）：密码错误直接报，否则尝试注册
-                    msg = str(exc)
-                    if "密码错误" in msg or "邮箱或密码错误" in msg:
-                        raise exc
-                    self.client.register(email, password, self.e_nick.get().strip())
+                except rc.RankError:
+                    # 登录 401：可能是未注册的新邮箱 → 尝试自动注册
+                    if self.client.token:
+                        raise
+                    try:
+                        self.client.register(email, password, self.e_nick.get().strip())
+                    except rc.RankError as reg_exc:
+                        msg = str(reg_exc)
+                        if "已注册" in msg or "已存在" in msg or "409" in msg:
+                            raise rc.RankError("邮箱或密码错误")  # 已注册但密码不对
+                        raise
             except Exception as exc:
                 def show_err():
                     self.lbl_login_err.config(text=str(exc))

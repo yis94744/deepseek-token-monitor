@@ -2,7 +2,7 @@
 """水豚噜噜 · DeepSeek 用量监控 主程序。
 
 一个完整的水豚主题桌面软件：
-- 主窗口：仪表盘（今日/本周/本月、7 天费用柱状图、各模型统计、按 API Key 统计、历史快照、设置）
+- 主窗口：仪表盘（今日/本周/本月、7 天费用柱状图、各模型统计、按 API Key 统计、排行榜（云端比拼）、设置）
 - 悬浮窗：360 风格圆形噜噜球，可拖动、悬停显示消耗金额、单击弹出使用额度面板、右键操作，可在设置里开关
 - 内置本地代理 http://127.0.0.1:8787，自动统计并计费 DeepSeek API 调用
 - 每天 00:00 自动日结、每周一自动周结、每月 1 日自动月结
@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.11"
+APP_VERSION = "1.13.14"
 
 
 # ================= 路径与资源 =================
@@ -680,6 +680,12 @@ class App:
                  font=(FONT, 14, "bold")).pack(anchor="w")
         tk.Label(title_box, text="DeepSeek Token Monitor", bg=C_BROWN, fg=C_GOLD,
                  font=(FONT, 8)).pack(anchor="w")
+        # 云端排名状态按钮（登录入口，随登录态刷新）
+        self.lbl_rank = tk.Label(header, text="云端排名 · 未登录", bg=C_BROWN,
+                                 fg="#fff3dc", font=(FONT, 9, "bold"), cursor="hand2",
+                                 padx=8, pady=2)
+        self.lbl_rank.pack(side="right", padx=6)
+        self.lbl_rank.bind("<Button-1>", lambda e: self._open_rank())
         self.lbl_date = tk.Label(header, text="", bg=C_BROWN, fg="#f6d9ae",
                                  font=(FONT, 10))
         self.lbl_date.pack(side="right", padx=(0, 4))
@@ -1539,47 +1545,169 @@ class App:
                 row["source"], fmt_int(row["requests"]),
                 fmt_int(row["cache_hit"] + row["cache_miss"]),
                 fmt_int(row["completion"]), fmt_money(row["cost"])))
-    # ---------- 历史快照页 ----------
+    # ---------- 排行榜页（云端 Token 排名，替代原历史快照） ----------
     def _add_history_page(self, nb, index):
         page = tk.Frame(nb, bg=C_BG)
-        nb.add(page, text="历史快照")
-        self._history_trees = {}
-        for col, (title, key_title) in enumerate([
-            ("日结", "日期"), ("周结", "周一"), ("月结", "月份"),
-        ]):
-            box = tk.Frame(page, bg=C_BG)
-            box.grid(row=0, column=col, sticky="nsew", padx=6, pady=10)
-            page.grid_columnconfigure(col, weight=1)
-            tk.Label(box, text=title, bg=C_BG, fg=C_BROWN_DARK,
-                     font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 4))
-            tree = ttk.Treeview(box, columns=("key", "req", "input", "output", "cost"),
-                                show="headings")
-            for c, text in zip(("key", "req", "input", "output", "cost"),
-                               (key_title, "请求数", "输入", "输出", "费用")):
-                tree.heading(c, text=text)
-            for c, width in zip(("key", "req", "input", "output", "cost"),
-                                (110, 60, 80, 80, 90)):
-                tree.column(c, width=width, anchor="center" if c != "key" else "w")
-            tree.pack(fill="both", expand=True)
-            self._history_trees[col] = tree
+        nb.add(page, text="排行榜")
+
+        # 顶部：登录状态 + 操作
+        top = tk.Frame(page, bg=C_BG)
+        top.pack(fill="x", padx=12, pady=8)
+        self.lbl_rank_state = tk.Label(top, text="", bg=C_BG, fg=C_BROWN_DARK,
+                                       font=(FONT, 10, "bold"))
+        self.lbl_rank_state.pack(side="left")
+        self.lbl_rank_day = tk.Label(top, text="", bg=C_BG, fg=C_SUB, font=(FONT, 9))
+        self.lbl_rank_day.pack(side="left", padx=10)
+
+        # 登录区（未登录时显示）
+        self.rank_login_box = tk.Frame(page, bg=C_BG, padx=12, pady=4)
+        r1 = tk.Frame(self.rank_login_box, bg=C_BG)
+        r1.pack(anchor="w")
+        tk.Label(r1, text="邮箱:", bg=C_BG, fg=C_TEXT, font=(FONT, 10)).pack(side="left")
+        self.re_email = ttk.Entry(r1, width=30)
+        self.re_email.pack(side="left", padx=6)
+        r2 = tk.Frame(self.rank_login_box, bg=C_BG)
+        r2.pack(anchor="w", pady=(4, 0))
+        tk.Label(r2, text="密码:", bg=C_BG, fg=C_TEXT, font=(FONT, 10)).pack(side="left")
+        self.re_pass = ttk.Entry(r2, width=30, show="*")
+        self.re_pass.pack(side="left", padx=6)
+        ttk.Button(r2, text="登录 / 注册", command=self._rank_page_login).pack(
+            side="left", padx=6)
+        tk.Label(self.rank_login_box, text="新邮箱自动注册；登录后比拼今日 Token 消耗",
+                 bg=C_BG, fg=C_SUB, font=(FONT, 8)).pack(anchor="w", pady=(4, 0))
+        self.lbl_rank_page_err = tk.Label(self.rank_login_box, text="", bg=C_BG,
+                                          fg=C_RED, font=(FONT, 9))
+        self.lbl_rank_page_err.pack(anchor="w")
+        # 占位（登录后隐藏）
+
+        # 榜单
+        cols = ("rank", "nick", "email", "tokens")
+        self.rank_tree = ttk.Treeview(page, columns=cols, show="headings")
+        for col, text, w in (("rank", "#", 70), ("nick", "昵称", 200),
+                             ("email", "邮箱", 240), ("tokens", "今日 Token", 170)):
+            self.rank_tree.heading(col, text=text)
+            self.rank_tree.column(col, width=w, anchor="center" if col in ("rank", "tokens")
+                                  else "w")
+        self.rank_tree.tag_configure("me", background="#fdf0d8", foreground=C_ORANGE_DEEP)
+        self.rank_tree.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        self.lbl_rank_hint = tk.Label(page, text="", bg=C_BG, fg=C_SUB, font=(FONT, 8))
+        self.lbl_rank_hint.pack(anchor="w", padx=12, pady=(0, 8))
 
         def refresh():
-            fetchers = (storage.list_daily_summaries, storage.list_weekly_summaries,
-                        storage.list_monthly_summaries)
-            for col, fetcher in enumerate(fetchers):
-                tree = self._history_trees.get(col)
-                if not tree:
-                    continue
-                for item in tree.get_children():
-                    tree.delete(item)
-                for row in fetcher():
-                    tree.insert("", "end", values=(
-                        row["key"], fmt_int(row["requests"]),
-                        fmt_int(row["cache_hit"] + row["cache_miss"]),
-                        fmt_int(row["completion"]), fmt_money(row["cost"])))
+            self._rank_page_refresh()
 
         refresh()
+
+        # 页面常驻 30s 自轮询（云端榜每半分钟刷新一次；与 reporter 全局 30s 同步对齐）
+        def auto_poll():
+            try:
+                self._rank_page_refresh()
+            except Exception:
+                pass
+            self.root.after(30000, auto_poll)
+        self.root.after(30000, auto_poll)
+
         return refresh
+
+    def _rank_page_login(self):
+        email = self.re_email.get().strip()
+        password = self.re_pass.get()
+        if not email or len(password) < 6:
+            self.lbl_rank_page_err.config(text="请填写邮箱与至少 6 位密码")
+            return
+        self.lbl_rank_page_err.config(text="登录中...")
+        self.root.update_idletasks()
+
+        def work():
+            try:
+                import rank_client as rc
+                c = rc.make_client()
+                try:
+                    c.login(email, password)
+                except rc.RankError:
+                    if c.token:
+                        raise
+                    try:
+                        c.register(email, password)
+                    except rc.RankError as reg_exc:
+                        msg = str(reg_exc)
+                        if "已注册" in msg or "已存在" in msg or "409" in msg:
+                            raise rc.RankError("邮箱或密码错误")
+                        raise
+                sess = rc.load_session()
+                sess["server"] = c.base
+                sess["token"] = c.token
+                sess["user"] = c.user
+                rc.save_session(sess)
+                self.root.after(0, self._rank_page_refresh)
+            except Exception as exc:
+                def show_err():
+                    self.lbl_rank_page_err.config(text=str(exc))
+                self.root.after(0, show_err)
+
+        import threading
+        threading.Thread(target=work, daemon=True).start()
+
+    def _rank_page_refresh(self):
+        try:
+            import rank_client as rc
+            sess = rc.load_session()
+            st = rc.get_state()
+            if sess.get("token"):
+                self.rank_login_box.pack_forget()
+                me = sess.get("user") or {}
+                nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
+                rank = st.get("my_rank") if st else None
+                state_txt = f"云端排名 · {nick}" + (f" · 第{rank}名" if rank else " · 同步中")
+                self.lbl_rank_state.config(text=state_txt, fg=C_BROWN_DARK)
+            else:
+                self.rank_login_box.pack(fill="x", padx=12, pady=4)
+                self.lbl_rank_state.config(text="云端排名 · 未登录", fg=C_BROWN_DARK)
+            self._render_rank_board()
+            self.lbl_rank_day.config(text=st.get("day") or "")
+        except Exception:
+            pass
+
+    def _render_rank_board(self):
+        try:
+            import rank_client as rc
+            sess = rc.load_session()
+            st = rc.get_state()
+            board = st.get("board")
+            if board is None:
+                # 主动拉一次（同步线程可能还没跑）
+                def fetch():
+                    try:
+                        c = rc.make_client()
+                        c.me()
+                        r = c.board()
+                        rc._state["board"] = r.get("board") or []
+                        rc._state["day"] = r.get("day")
+                        self.root.after(0, self._render_rank_board)
+                    except Exception:
+                        pass
+                if sess.get("token"):
+                    import threading
+                    threading.Thread(target=fetch, daemon=True).start()
+                return
+            self.rank_tree.delete(*self.rank_tree.get_children())
+            me = sess.get("user") or {}
+            uid = me.get("user_id")
+            for b in board[:100]:
+                tags = ("me",) if uid and b.get("user_id") == uid else ()
+                nick = b.get("nickname") or (b.get("email") or "?").split("@")[0]
+                self.rank_tree.insert("", "end", values=(
+                    b["rank"], nick, b.get("email"), fmt_int(b.get("tokens", 0))),
+                    tags=tags)
+            err = st.get("error")
+            t = st.get("last_time") or ""
+            if err:
+                self.lbl_rank_hint.config(text=f"同步中（{err}）· 30s 自动更新")
+            else:
+                self.lbl_rank_hint.config(
+                    text=f"共 {len(board)} 人上榜 · 每 30s 云端同步{t and ' · 上次 ' + t}")
+        except Exception:
+            pass
 
     # ---------- 设置页 ----------
     def _add_settings_page(self, nb, index):
@@ -1672,6 +1800,8 @@ class App:
 
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
+            anchor="w", fill="x", pady=2)
+        ttk.Button(left, text="云端排名（登录比拼 Token）", command=self._open_rank).pack(
             anchor="w", fill="x", pady=2)
         ttk.Button(left, text="检查更新", command=self._check_update_now).pack(
             anchor="w", fill="x", pady=2)
@@ -2164,12 +2294,12 @@ class App:
             menu.grab_release()
 
     def _open_rank(self):
-        """打开"组织 Token 排名"登录/排名对话框。"""
+        """打开"云端 Token 排名"登录/排名对话框（设置页按钮 / 悬浮球 / 桌宠右键）。"""
         try:
             import rank_ui
             rank_ui.open_rank_dialog(self.root)
         except Exception as exc:
-            messagebox.showerror("打开失败", f"组织排名功能加载失败：\n{exc}")
+            messagebox.showerror("打开失败", f"云端排名功能加载失败：\n{exc}")
 
     def _show_main(self):
         self.root.deiconify()
@@ -2635,6 +2765,24 @@ class App:
 
         # 5) 日期与仪表盘图表
         self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))
+        # 5.1) 云端排名状态按钮：随登录态与名次刷新
+        try:
+            if hasattr(self, "lbl_rank"):
+                import rank_client as _rc
+                sess = _rc.load_session()
+                st = _rc.get_state()
+                if sess.get("token"):
+                    me = sess.get("user") or {}
+                    nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
+                    rank = st.get("my_rank") if st else None
+                    if rank:
+                        self.lbl_rank.config(text=f"云排名 {nick} · 第{rank}名", fg=C_GOLD)
+                    else:
+                        self.lbl_rank.config(text=f"云排名 {nick} · 同步中", fg="#f6d9ae")
+                else:
+                    self.lbl_rank.config(text="云排名 · 未登录", fg="#fff3dc")
+        except Exception:
+            pass
         try:
             if self.nb.index("current") == 0:
                 self._draw_chart()

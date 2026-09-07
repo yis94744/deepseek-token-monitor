@@ -7,7 +7,7 @@ Windows Server：安装 MySQL 8（https://dev.mysql.com/downloads/installer/ 选
 记录 root 密码；安装后用 root 执行：
 
 ```sql
-CREATE DATABASE cloud_rank CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE cloud_rank CHARACTER SET utf8 COLLATE utf8_general_ci;
 CREATE USER 'rank'@'localhost' IDENTIFIED BY '改成强密码';
 CREATE USER 'rank'@'127.0.0.1' IDENTIFIED BY '改成强密码';
 GRANT ALL ON cloud_rank.* TO 'rank'@'localhost';
@@ -21,13 +21,13 @@ pip install -r requirements.txt
 
 ## 3. 建表
 ```bash
-set CLOUDRANK_DB=mysql+pymysql://rank:改成强密码@127.0.0.1:3306/cloud_rank?charset=utf8mb4
+set CLOUDRANK_DB=mysql+pymysql://rank:改成强密码@127.0.0.1:3306/cloud_rank?charset=utf8
 python init_db.py
 ```
 
 ## 4. 启动服务（建议注册为系统服务/计划任务）
 ```bash
-set CLOUDRANK_DB=mysql+pymysql://rank:改成强密码@127.0.0.1:3306/cloud_rank?charset=utf8mb4
+set CLOUDRANK_DB=mysql+pymysql://rank:改成强密码@127.0.0.1:3306/cloud_rank?charset=utf8
 set CLOUDRANK_PORT=8000
 python -m uvicorn app:app --host 0.0.0.0 --port 8000
 ```

@@ -11,7 +11,7 @@ import app as backend
 
 DB_URL = os.environ.get(
     "CLOUDRANK_DB",
-    "mysql+pymysql://rank:rankpass@127.0.0.1:3306/cloud_rank?charset=utf8mb4")
+    "mysql+pymysql://root:root@127.0.0.1:3306/cloud_rank?charset=utf8")
 
 
 def main():

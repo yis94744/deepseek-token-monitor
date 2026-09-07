@@ -27,7 +27,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 # ---------------- 配置 ----------------
 DB_URL = os.environ.get(
     "CLOUDRANK_DB",
-    "mysql+pymysql://rank:rankpass@127.0.0.1:3306/cloud_rank?charset=utf8mb4")
+    "mysql+pymysql://root:root@127.0.0.1:3306/cloud_rank?charset=utf8")
 TOKEN_TTL_DAYS = 365  # token 有效期（登录态本地保存，足够长）
 BC = os.environ.get("CLOUDRANK_BC", "Asia/Shanghai")  # 排名"天"的时区
 TZ = timezone(timedelta(hours=8))  # 服务按北京时间划分自然日
@@ -87,6 +87,20 @@ def today_bj() -> date:
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def mask_email(email: str) -> str:
+    """邮箱脱敏：保留 @ 前首尾各 2 字符，中间用 *** 替换（过短则全打码）。
+
+    例：alice123@test.com -> al***23@test.com；ab@x.com -> ***@x.com
+    供对外榜单等场景使用，保护用户隐私。
+    """
+    if not email or "@" not in email:
+        return email or ""
+    local, _, domain = email.partition("@")
+    if len(local) <= 4:
+        return "***@" + domain
+    return local[:2] + "***" + local[-2:] + "@" + domain
 
 
 # ---------------- 请求体 ----------------
@@ -201,10 +215,15 @@ def build_board(db, day, limit=200):
     out = []
     for r in rows:
         u = users.get(r.user_id)
+        if u:
+            masked = mask_email(u.email)
+            nick = u.nickname or masked.split("@")[0]
+        else:
+            masked, nick = "?", ""
         out.append({"rank": len(out) + 1,
                     "user_id": r.user_id,
-                    "email": (u.email if u else "?"),
-                    "nickname": (u.nickname or (u.email.split("@")[0] if u else "")),
+                    "email": masked,
+                    "nickname": nick,
                     "tokens": r.tokens})
     return out
 
