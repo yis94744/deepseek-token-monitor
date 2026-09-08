@@ -23,6 +23,8 @@ import time
 
 _APP_DIR = os.path.join(os.environ.get("APPDATA", ""), "DeepSeekTokenMonitor")
 _SETTINGS_PATH = os.path.join(_APP_DIR, "settings.json")
+_RANK_PATH = os.path.join(_APP_DIR, "ranking.json")  # 独立会话文件（与 settings.json 隔离防并发覆盖）
+_LEGACY_RANK_KEY = "rank"  # 旧版把会话存在 settings.json 的 rank 段
 _DEFAULT_SERVER = "http://106.52.172.73"
 _REPORT_INTERVAL = 30  # 秒：半分钟上报一次并同步榜单
 
@@ -98,27 +100,43 @@ class RankClient:
         return self._request("GET", "/api/board")
 
 
-# ---------- 会话持久化（settings.json 的 rank 段） ----------
+# ---------- 会话持久化（独立 ranking.json；旧版 settings.json 的 rank 段自动迁移） ----------
 def load_session():
+    # 优先读取独立的 ranking.json
+    try:
+        with open(_RANK_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict):
+            return d
+    except Exception:
+        pass
+    # 迁移：老版本存在 settings.json 的 rank 段
     try:
         with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
-        return cfg.get("rank", {}) or {}
+        rank = cfg.get(_LEGACY_RANK_KEY)
+        if rank:
+            save_session(rank)
+            return rank
     except Exception:
-        return {}
+        pass
+    return {}
 
 
 def save_session(sess):
-    cfg = {}
-    try:
-        with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-    except Exception:
-        cfg = {}
-    cfg["rank"] = sess
+    """原子写独立 ranking.json（与主程序 settings.json 完全隔离，杜绝并发互相覆盖）。"""
     os.makedirs(_APP_DIR, exist_ok=True)
-    with open(_SETTINGS_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    try:
+        tmp = _RANK_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sess or {}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _RANK_PATH)
+    except Exception:
+        try:
+            with open(_RANK_PATH, "w", encoding="utf-8") as f:
+                json.dump(sess or {}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
 
 def clear_session():

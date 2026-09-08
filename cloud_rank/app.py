@@ -181,8 +181,10 @@ def login(body: LoginIn, db=Depends(get_db)):
     u = db.query(User).filter(User.email == email).first()
     if not u or not verify_password(body.password, u.password_hash):
         raise HTTPException(401, "邮箱或密码错误")
-    u.token = new_token()
-    u.token_expires = now_utc() + timedelta(days=TOKEN_TTL_DAYS)
+    # 登录不轮换 token：同一账号多设备共用同一 token，避免互相顶掉导致"登录失效"
+    if not u.token or (u.token_expires and u.token_expires < now_utc()):
+        u.token = new_token()
+        u.token_expires = now_utc() + timedelta(days=TOKEN_TTL_DAYS)
     db.commit()
     return {"ok": True, "token": u.token, "user": _public_user(u)}
 
