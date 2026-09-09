@@ -30,7 +30,10 @@ _REPORT_INTERVAL = 30  # 秒：半分钟上报一次并同步榜单
 
 
 class RankError(Exception):
-    """后端返回业务错误（非 2xx）时抛出。"""
+    """后端返回业务错误（非 2xx）时抛出。code 标识错误类型便于 UI 处理。"""
+    def __init__(self, msg, code=""):
+        super().__init__(msg)
+        self.code = code
 
 
 class RankClient:
@@ -57,9 +60,15 @@ class RankClient:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
+            code = e.code
             raw = e.read().decode("utf-8", "replace")
+            # 401=登录失效（token 被顶掉/过期/账号被改密码）；UI 应当清本地会话回登录页
+            if code == 401:
+                raise RankError(str((json.loads(raw) if raw else {}).get("detail", "登录已失效")) or "登录已失效",
+                                "TOKEN_INVALID")
+            raise RankError(f"请求失败({code}): {raw[:120]}")
         except Exception as exc:
-            raise RankError(f"无法连接服务器：{exc}")
+            raise RankError(f"无法连接服务器：{exc}", "NETWORK")
         try:
             j = json.loads(raw)
         except Exception:
@@ -168,7 +177,7 @@ def get_state():
 
 
 _state = {"board": None, "day": None, "my_rank": None, "my_tokens": None,
-          "last_time": None, "error": None}
+          "last_time": None, "error": None, "token_invalid": False}
 
 
 # ---------- 后台上报线程（30s，常驻） ----------
@@ -183,10 +192,18 @@ def _today_tokens():
 
 
 def _sync_once(c):
-    """上报一次今日累计并把榜单写入内存态。返回 True=成功。"""
+    """上报一次今日累计并把榜单写入内存态。返回 True=成功。
+
+    401 时把 _state["token_invalid"] 置 True，UI 端读取后可清 ranking.json 并回登录页。
+    """
     total = _today_tokens()
     try:
         r = c.report_today(total)
+    except RankError as exc:
+        _state["error"] = str(exc)
+        if exc.code == "TOKEN_INVALID":
+            _state["token_invalid"] = True
+        return False
     except Exception as exc:
         _state["error"] = str(exc)
         return False
@@ -199,6 +216,7 @@ def _sync_once(c):
     _state["my_tokens"] = total
     _state["last_time"] = time.strftime("%H:%M:%S")
     _state["error"] = None
+    _state["token_invalid"] = False
     return True
 
 

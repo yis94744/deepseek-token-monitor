@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.19"
+APP_VERSION = "1.13.20"
 
 
 # ================= 路径与资源 =================
@@ -1657,18 +1657,26 @@ class App:
             import rank_client as rc
             sess = rc.load_session()
             st = rc.get_state()
+            err = st.get("error")
             if sess.get("token"):
                 self.rank_login_box.pack_forget()
                 me = sess.get("user") or {}
                 nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
                 rank = st.get("my_rank") if st else None
-                state_txt = f"云端排名 · {nick}" + (f" · 第{rank}名" if rank else " · 同步中")
-                self.lbl_rank_state.config(text=state_txt, fg=C_BROWN_DARK)
+                if st.get("token_invalid"):
+                    state_txt = f"云端排名 · 登录已失效，请重新登录"
+                else:
+                    state_txt = f"云端排名 · {nick}" + (f" · 第{rank}名" if rank else " · 同步中")
+                self.lbl_rank_state.config(text=state_txt,
+                                            fg=C_RED if st.get("token_invalid") else C_BROWN_DARK)
             else:
                 self.rank_login_box.pack(fill="x", padx=12, pady=4)
                 self.lbl_rank_state.config(text="云端排名 · 未登录", fg=C_BROWN_DARK)
             self._render_rank_board()
             self.lbl_rank_day.config(text=st.get("day") or "")
+            # 把后端错误透出到页面错误标签（"同步中"+ 错误信息 = 用户能看见原因）
+            if self.lbl_rank_page_err and err and not st.get("board"):
+                self.lbl_rank_page_err.config(text=err)
         except Exception:
             pass
 
@@ -1678,8 +1686,27 @@ class App:
             sess = rc.load_session()
             st = rc.get_state()
             board = st.get("board")
+            # 401 / 网络错误：让 UI 立即反映出来，不能永远"同步中"
+            err = st.get("error")
+            tok_invalid = st.get("token_invalid")
+            if tok_invalid and sess.get("token"):
+                # 登录态被服务端拒绝 → 清本地会话，回登录视图
+                try:
+                    rc.clear_session()
+                except Exception:
+                    pass
+                if self.rank_login_box.winfo_ismapped():
+                    self.lbl_rank_state.config(text="登录已失效，请重新登录", fg=C_RED)
+                else:
+                    self.rank_login_box.pack(fill="x", padx=12, pady=4)
+                    self.lbl_rank_state.config(text="登录已失效，请重新登录", fg=C_RED)
+                self.lbl_rank_day.config(text="")
+                self.rank_tree.delete(*self.rank_tree.get_children())
+                if self.lbl_rank_page_err:
+                    self.lbl_rank_page_err.config(text=str(err) if err else "请重新登录后查看榜单")
+                return
             if board is None:
-                # 主动拉一次（同步线程可能还没跑）
+                # 主动拉一次（reporter 30s 首报还没到）
                 def fetch():
                     try:
                         c = rc.make_client()
@@ -1688,11 +1715,23 @@ class App:
                         rc._state["board"] = r.get("board") or []
                         rc._state["day"] = r.get("day")
                         self.root.after(0, self._render_rank_board)
-                    except Exception:
-                        pass
+                    except rc.RankError as exc:
+                        # 错误写到内存态，UI 立即反映（不让用户看"卡住"）
+                        rc._state["error"] = str(exc)
+                        if exc.code == "TOKEN_INVALID":
+                            rc._state["token_invalid"] = True
+                        else:
+                            rc._state["error"] = f"网络/服务器错误：{exc}"
+                        self.root.after(0, self._render_rank_board)
+                    except Exception as exc:
+                        rc._state["error"] = f"无法连接服务器：{exc}"
+                        self.root.after(0, self._render_rank_board)
                 if sess.get("token"):
                     import threading
                     threading.Thread(target=fetch, daemon=True).start()
+                # 等结果回来前先在 hint 里显示当前 error（若有）避免永远"同步中"
+                if err and not board:
+                    self.lbl_rank_hint.config(text=f"同步中（{err}）")
                 return
             self.rank_tree.delete(*self.rank_tree.get_children())
             me = sess.get("user") or {}
@@ -1703,6 +1742,7 @@ class App:
                 self.rank_tree.insert("", "end", values=(
                     b["rank"], nick, b.get("email"), fmt_int(b.get("tokens", 0))),
                     tags=tags)
+            st = rc.get_state()
             err = st.get("error")
             t = st.get("last_time") or ""
             if err:
@@ -1892,6 +1932,8 @@ class App:
         """首次启动时如果没有 API Key，弹出引导窗口让用户填写（可跳过）。"""
         if (self.config.get("api_key") or "").strip():
             return
+        if os.environ.get("DSTM_SKIP_KEY_WIZARD") == "1":
+            return  # 测试/无人值守环境：不弹引导，直接跳过
         win = tk.Toplevel(self.root)
         win.title("欢迎使用水豚噜噜监控")
         win.geometry("430x340")
@@ -2926,15 +2968,18 @@ class App:
             pass
 
     def _download_update(self, info: dict):
-        """下载新版便携版 exe（带进度条），完成后本地覆盖并自动重启。
+        """下载新版（带进度条），完成后引导用户安装并自动重启。
 
-        走便携版本地更新：直接覆盖当前程序所在目录的 exe，绕开安装器
-        （部分环境下安装器的 MoveFile 会被安全软件拦截导致更新失败）。
+        优先下载 setup 安装包（含 VC 运行库，兼容无 VC++ Redistributable 电脑），
+        下载完弹窗让用户运行安装；若 release 没带 setup 则兜底走便携覆盖。
         """
-        url = (info or {}).get("portable_url") or (info or {}).get("setup_url")
-        tag = (info or {}).get("tag", "")
+        info = info or {}
+        # 优先 setup_url（含 VC DLL，可彻底解决其他电脑 DLL 报错）；其次便携版
+        url = info.get("setup_url") or info.get("portable_url")
+        tag = info.get("tag", "")
+        is_setup = bool(info.get("setup_url"))
         if not url:
-            self._open_update_page()  # 拿不到直链时退回打开下载页
+            self._open_update_page()
             return
         try:
             base = os.environ.get("LOCALAPPDATA") or APPDATA_DIR
@@ -2977,8 +3022,12 @@ class App:
                     dlg.destroy()
                 except Exception:
                     pass
+                # 失败兜底：清晰指引去 GitHub Releases 手动下载（避免自动更新被安全软件拦）
                 messagebox.showerror(
-                    "更新失败", "%s\n\n可点击「打开下载页」前往 GitHub 手动下载。" % msg)
+                    "更新失败",
+                    f"{msg}\n\n自动更新失败，请到以下地址手动下载最新版安装包：\n"
+                    f"https://github.com/yis94744/deepseek-token-monitor/releases\n\n"
+                    f"（便携版覆盖可能被 360 等安全软件拦截，建议下载 Setup 安装包更稳）")
             self.root.after(0, apply)
 
         def work():
@@ -2988,12 +3037,13 @@ class App:
                     return
                 def ready():
                     try:
-                        self._upd_lbl.config(text="下载完成，正在安装（程序将自动重启）...")
+                        self._upd_lbl.config(text="下载完成，准备安装...")
                         btn_cancel.config(state="disabled")
                     except Exception:
                         pass
                 self.root.after(0, ready)
-                self.root.after(800, lambda: self._install_update(dest))
+                # setup 走引导用户安装；便携版走本地覆盖
+                self.root.after(800, lambda: self._install_update(dest, is_setup=is_setup, tag=tag))
             except Exception as exc:
                 try:
                     os.remove(dest)
@@ -3003,13 +3053,24 @@ class App:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _install_update(self, new_exe: str):
-        """退出当前程序，由后台脚本把新版便携 exe 就地覆盖并自动重启。
+    def _install_update(self, new_exe: str, is_setup: bool = False, tag: str = ""):
+        """下载完后引导安装并自动重启。
 
-        流程：等旧程序完全退出 → 用新 exe 覆盖当前程序所在目录的同名 exe →
-        重新启动该 exe → 清理临时文件。全程用文件复制，绕开安装器。
+        - is_setup=True：直接启动 setup 安装包（含 VC 运行库，含完整安装逻辑）
+        - is_setup=False（便携版覆盖）：等旧程序退出 → 用新 exe 覆盖当前目录 exe → 重启
         """
         try:
+            if is_setup:
+                # setup：直接启动安装包。Setup 是 Inno 安装器，安装时 Inno 会停旧进程、装新文件
+                # 到 Program Files、并在 [Run] 自动启动新版（装完即覆盖旧版）。
+                # 启动安装包前先停掉本进程（Inno 会自检旧进程）
+                # 启动安装包（脱离当前 Tk 进程，确保 quit 后仍继续）
+                import subprocess as _sp
+                _sp.Popen([new_exe], creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+                self.quit()  # 退出当前程序（让 Inno 接管覆盖/装新）
+                return
+
+            # 便携版：旧程序退出后用新 exe 就地覆盖并重启（保留原行为）
             target_dir = os.path.dirname(os.path.abspath(sys.executable))
             target_exe = os.path.join(target_dir, "DeepSeekTokenMonitor.exe")
             update_dir = os.path.dirname(new_exe)

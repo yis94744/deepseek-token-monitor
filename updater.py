@@ -13,8 +13,19 @@ import urllib.request
 from datetime import datetime
 
 REPO = "yis94744/deepseek-token-monitor"
-API_URL = "https://api.github.com/repos/%s/releases/latest" % REPO
 RELEASE_URL = "https://github.com/%s/releases/tag/%%s" % REPO
+
+
+def api_url() -> str:
+    """最新 release 接口地址。
+
+    默认 GitHub Releases API；设置环境变量 DSTM_UPDATE_API 可整体覆盖
+    （测试用：指向本地 mock 服务器，例如 http://127.0.0.1:PORT/releases/latest）。
+    """
+    return os.environ.get("DSTM_UPDATE_API") or \
+        "https://api.github.com/repos/%s/releases/latest" % REPO
+
+
 _TIMEOUT = 8.0
 _LOG = None  # 日志文件路径，由 init_log() 初始化
 
@@ -56,7 +67,7 @@ def check_latest() -> dict:
     """
     try:
         req = urllib.request.Request(
-            API_URL,
+            api_url(),
             headers={"User-Agent": "DeepSeekTokenMonitor",
                      "Accept": "application/vnd.github+json"})
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
@@ -90,6 +101,19 @@ def download(url: str, dest: str, progress_cb=None, cancel_event=None,
     req = urllib.request.Request(url, headers={"User-Agent": "DeepSeekTokenMonitor"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
+        if total == 0:
+            # 服务器没给 Content-Length（自建/本地更新源常见）：用 Range 探测总大小
+            try:
+                probe = urllib.request.Request(
+                    url, headers={"User-Agent": "DeepSeekTokenMonitor",
+                                  "Range": "bytes=0-0"})
+                with urllib.request.urlopen(probe, timeout=_TIMEOUT) as pr:
+                    cr = pr.headers.get("Content-Range") or ""
+                    # Content-Range: bytes 0-0/12345
+                    m = re.search(r"/(\d+)\s*$", cr)
+                    total = int(m.group(1)) if m else 0
+            except Exception:
+                total = 0
         done = 0
         with open(dest, "wb") as f:
             while True:
