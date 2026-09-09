@@ -2,7 +2,7 @@
 """水豚噜噜 · DeepSeek 用量监控 主程序。
 
 一个完整的水豚主题桌面软件：
-- 主窗口：仪表盘（今日/本周/本月、7 天费用柱状图、各模型统计、按 API Key 统计、排行榜（云端比拼）、设置）
+- 主窗口：仪表盘（今日/本周/本月、7 天费用柱状图、各模型统计、按 API Key 统计、排行榜（比拼）、设置）
 - 悬浮窗：360 风格圆形噜噜球，可拖动、悬停显示消耗金额、单击弹出使用额度面板、右键操作，可在设置里开关
 - 内置本地代理 http://127.0.0.1:8787，自动统计并计费 DeepSeek API 调用
 - 每天 00:00 自动日结、每周一自动周结、每月 1 日自动月结
@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.20"
+APP_VERSION = "1.13.21"
 
 
 # ================= 路径与资源 =================
@@ -684,8 +684,8 @@ class App:
                  font=(FONT, 14, "bold")).pack(anchor="w")
         tk.Label(title_box, text="DeepSeek Token Monitor", bg=C_BROWN, fg=C_GOLD,
                  font=(FONT, 8)).pack(anchor="w")
-        # 云端排名状态按钮（登录入口，随登录态刷新）
-        self.lbl_rank = tk.Label(header, text="云端排名 · 未登录", bg=C_BROWN,
+        # 排名状态按钮（登录入口，随登录态刷新）
+        self.lbl_rank = tk.Label(header, text="排名 · 未登录", bg=C_BROWN,
                                  fg="#fff3dc", font=(FONT, 9, "bold"), cursor="hand2",
                                  padx=8, pady=2)
         self.lbl_rank.pack(side="right", padx=6)
@@ -1549,7 +1549,7 @@ class App:
                 row["source"], fmt_int(row["requests"]),
                 fmt_int(row["cache_hit"] + row["cache_miss"]),
                 fmt_int(row["completion"]), fmt_money(row["cost"])))
-    # ---------- 排行榜页（云端 Token 排名，替代原历史快照） ----------
+    # ---------- 排行榜页（Token 排名，替代原历史快照） ----------
     def _add_history_page(self, nb, index):
         page = tk.Frame(nb, bg=C_BG)
         nb.add(page, text="排行榜")
@@ -1602,7 +1602,7 @@ class App:
 
         refresh()
 
-        # 页面常驻 30s 自轮询（云端榜每半分钟刷新一次；与 reporter 全局 30s 同步对齐）
+        # 页面常驻 30s 自轮询（榜每半分钟刷新一次；与 reporter 全局 30s 同步对齐）
         def auto_poll():
             try:
                 self._rank_page_refresh()
@@ -1664,14 +1664,14 @@ class App:
                 nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
                 rank = st.get("my_rank") if st else None
                 if st.get("token_invalid"):
-                    state_txt = f"云端排名 · 登录已失效，请重新登录"
+                    state_txt = f"排名 · 登录已失效，请重新登录"
                 else:
-                    state_txt = f"云端排名 · {nick}" + (f" · 第{rank}名" if rank else " · 同步中")
+                    state_txt = f"排名 · {nick}" + (f" · 第{rank}名" if rank else " · 同步中")
                 self.lbl_rank_state.config(text=state_txt,
                                             fg=C_RED if st.get("token_invalid") else C_BROWN_DARK)
             else:
                 self.rank_login_box.pack(fill="x", padx=12, pady=4)
-                self.lbl_rank_state.config(text="云端排名 · 未登录", fg=C_BROWN_DARK)
+                self.lbl_rank_state.config(text="排名 · 未登录", fg=C_BROWN_DARK)
             self._render_rank_board()
             self.lbl_rank_day.config(text=st.get("day") or "")
             # 把后端错误透出到页面错误标签（"同步中"+ 错误信息 = 用户能看见原因）
@@ -1749,7 +1749,7 @@ class App:
                 self.lbl_rank_hint.config(text=f"同步中（{err}）· 30s 自动更新")
             else:
                 self.lbl_rank_hint.config(
-                    text=f"共 {len(board)} 人上榜 · 每 30s 云端同步{t and ' · 上次 ' + t}")
+                    text=f"共 {len(board)} 人上榜 · 每 30s 同步{t and ' · 上次 ' + t}")
         except Exception:
             pass
 
@@ -1845,7 +1845,7 @@ class App:
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
             anchor="w", fill="x", pady=2)
-        ttk.Button(left, text="云端排名（登录比拼 Token）", command=self._open_rank).pack(
+        ttk.Button(left, text="排名（登录比拼 Token）", command=self._open_rank).pack(
             anchor="w", fill="x", pady=2)
         ttk.Button(left, text="检查更新", command=self._check_update_now).pack(
             anchor="w", fill="x", pady=2)
@@ -2330,7 +2330,7 @@ class App:
         menu = tk.Menu(self.float_win, tearoff=0)
         menu.add_command(label="打开主界面", command=self._show_main)
         menu.add_command(label="立即刷新余额", command=self._refresh_balance_now)
-        menu.add_command(label="云端排名", command=lambda: self._open_rank())
+        menu.add_command(label="排名", command=lambda: self._open_rank())
         menu.add_command(label="隐藏悬浮窗", command=self._hide_float)
         menu.add_separator()
         menu.add_command(label="退出程序", command=self.quit)
@@ -2340,12 +2340,12 @@ class App:
             menu.grab_release()
 
     def _open_rank(self):
-        """打开"云端 Token 排名"登录/排名对话框（设置页按钮 / 悬浮球 / 桌宠右键）。"""
+        """打开"排名"登录/排名对话框（设置页按钮 / 悬浮球 / 桌宠右键）。"""
         try:
             import rank_ui
             rank_ui.open_rank_dialog(self.root)
         except Exception as exc:
-            messagebox.showerror("打开失败", f"云端排名功能加载失败：\n{exc}")
+            messagebox.showerror("打开失败", f"排名功能加载失败：\n{exc}")
 
     def _show_main(self):
         self.root.deiconify()
@@ -2627,7 +2627,7 @@ class App:
         menu = tk.Menu(self.pet_win, tearoff=0)
         menu.add_command(label="打开主界面", command=self._show_main)
         menu.add_command(label="立即刷新余额", command=self._refresh_balance_now)
-        menu.add_command(label="云端排名", command=lambda: self._open_rank())
+        menu.add_command(label="排名", command=lambda: self._open_rank())
         menu.add_command(label="隐藏桌宠", command=self._hide_float)
         menu.add_separator()
         menu.add_command(label="退出程序", command=self.quit)
@@ -2811,7 +2811,7 @@ class App:
 
         # 5) 日期与仪表盘图表
         self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))
-        # 5.1) 云端排名状态按钮：随登录态与名次刷新
+        # 5.1) 排名状态按钮：随登录态与名次刷新
         try:
             if hasattr(self, "lbl_rank"):
                 import rank_client as _rc
@@ -2822,11 +2822,11 @@ class App:
                     nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
                     rank = st.get("my_rank") if st else None
                     if rank:
-                        self.lbl_rank.config(text=f"云排名 {nick} · 第{rank}名", fg=C_GOLD)
+                        self.lbl_rank.config(text=f"排名 {nick} · 第{rank}名", fg=C_GOLD)
                     else:
-                        self.lbl_rank.config(text=f"云排名 {nick} · 同步中", fg="#f6d9ae")
+                        self.lbl_rank.config(text=f"排名 {nick} · 同步中", fg="#f6d9ae")
                 else:
-                    self.lbl_rank.config(text="云排名 · 未登录", fg="#fff3dc")
+                    self.lbl_rank.config(text="排名 · 未登录", fg="#fff3dc")
         except Exception:
             pass
         try:

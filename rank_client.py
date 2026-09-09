@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-rank_client.py — DeepSeekTokenMonitor 的云端 Token 排名客户端（全平台榜版）
+rank_client.py — DeepSeekTokenMonitor 的 Token 排名客户端（全平台榜版）
 
 协议（见 cloud_rank/app.py）：
   POST /api/register   {email, password, nickname} -> {token, user}

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-rank_ui.py — DeepSeekTokenMonitor 的云端 Token 排名 UI（全平台榜版）
+rank_ui.py — DeepSeekTokenMonitor 的 Token 排名 UI（全平台榜版）
 
 打开方式：主程序调用 open_rank_dialog(root)。
 - 登录/注册：邮箱 + 密码（未注册邮箱将自动注册）
@@ -34,7 +34,7 @@ class RankDialog(tk.Toplevel):
 
     def __init__(self, master):
         super().__init__(master)
-        self.title("云端 Token 排名")
+        self.title("Token 排名")
         self.configure(bg=C_BG)
         self.resizable(False, False)
         self.transient(master)
@@ -226,7 +226,7 @@ class RankDialog(tk.Toplevel):
             self.lbl_hint.config(text=f"同步中（{err}）· 30s 自动更新")
         else:
             self.lbl_hint.config(
-                text=f"共 {len(board)} 人上榜 · 每 30s 云端同步{t and ' · 上次 ' + t}")
+                text=f"共 {len(board)} 人上榜 · 每 30s 同步{t and ' · 上次 ' + t}")
 
     def _logout(self):
         rc.clear_session()
@@ -242,9 +242,9 @@ class RankDialog(tk.Toplevel):
 
 
 def open_rank_dialog(root):
-    """主程序入口：打开云端排名对话框。"""
+    """主程序入口：打开排名对话框。"""
     try:
         dlg = RankDialog(root)
         dlg.grab_set()
     except Exception as exc:
-        messagebox.showerror("打开失败", f"云排名加载失败：\n{exc}")
+        messagebox.showerror("打开失败", f"排名加载失败：\n{exc}")
