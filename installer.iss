@@ -1,7 +1,7 @@
 [Setup]
 AppId={{A7E33F1C-4D2B-4C6E-9F8B-2B5A0C77A8D1}
 AppName=水豚噜噜 DeepSeek 用量监控
-AppVersion=1.13.22
+AppVersion=1.13.23
 AppPublisher=CapybaraMonitor
 DefaultDirName={userpf}\DeepSeekTokenMonitor
 DefaultGroupName=水豚噜噜 DeepSeek 用量监控
@@ -27,6 +27,7 @@ Name: "startup"; Description: "开机自动启动（后台运行）"; GroupDescr
 
 [Files]
 Source: "C:\Users\kelang\Documents\Codex\2026-08-13\new-chat-3\outputs\deepseek-token-monitor\dist\DeepSeekTokenMonitor.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "C:\Users\kelang\Documents\Codex\2026-08-13\new-chat-3\outputs\deepseek-token-monitor\relaunch.vbs"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\水豚噜噜监控"; Filename: "{app}\DeepSeekTokenMonitor.exe"
@@ -38,8 +39,9 @@ Name: "{userstartup}\DeepSeekTokenMonitor"; Filename: "{app}\DeepSeekTokenMonito
 Name: "{userstartup}\DeepSeekTokenMonitor.lnk"; Type: files
 
 [Run]
-; 静默安装（自动更新）后同样自动启动新版本，实现"更新完成自动覆盖并重启"
-Filename: "{app}\DeepSeekTokenMonitor.exe"; Description: "立即启动水豚噜噜监控"; Flags: nowait postinstall
+; 通过 relaunch.vbs 延迟自启：等杀软对新 exe 的扫描窗口过去再启动，
+; 避免"更新完立刻启动"偶发 Failed to load Python DLL（解压被锁）
+Filename: "wscript.exe"; Parameters: "{app}\relaunch.vbs"; Flags: runhidden nowait postinstall; Description: "立即启动水豚噜噜监控"
 
 [UninstallDelete]
 Name: "{app}"; Type: filesandordirs
