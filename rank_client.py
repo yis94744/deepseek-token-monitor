@@ -11,8 +11,9 @@ rank_client.py — DeepSeekTokenMonitor 的 Token 排名客户端（全平台榜
 
 行为：
   - 登录态（server/token/user）保存在 %APPDATA%/DeepSeekTokenMonitor/settings.json 的 rank 段
-  - start_reporter() 守护线程每 30s 上报一次【当日累计 token】（storage.today_stats 多源总量），
+  - start_reporter() 守护线程上报【当日累计 token】（storage.today_stats 多源总量），
     上报响应中的榜单缓存在内存供 UI 读取；未登录/未启用时静默跳过
+  - 网络持续失败自动退避（30s→60s→120s→…→300s 封顶），恢复后立即回到 30s
   - 只上报 token 数字；不上报任何对话内容 / API Key / 余额等敏感信息
 
 服务器地址：settings.rank.server，默认 http://106.52.172.73（标准 80 端口，全网可达）。
@@ -26,7 +27,36 @@ _SETTINGS_PATH = os.path.join(_APP_DIR, "settings.json")
 _RANK_PATH = os.path.join(_APP_DIR, "ranking.json")  # 独立会话文件（与 settings.json 隔离防并发覆盖）
 _LEGACY_RANK_KEY = "rank"  # 旧版把会话存在 settings.json 的 rank 段
 _DEFAULT_SERVER = "http://106.52.172.73"
-_REPORT_INTERVAL = 30  # 秒：半分钟上报一次并同步榜单
+_REPORT_INTERVAL = 30  # 秒：基础间隔（失败自动退避，上限 300s）
+
+
+def _friendly_net_error(exc) -> str:
+    """把 urllib/socket 底层异常转成普通用户能看懂的中文提示。
+
+    例：<urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>
+      -> 无法连接服务器（目标计算机积极拒绝）
+    """
+    msg = str(exc)
+    # 去掉 <urlopen error ...> / [WinError NNNN] 机器包装
+    m = msg
+    if ">" in m:
+        m = m.rsplit(">", 1)[-1]
+    m = m.strip().strip(".。")
+    # 归类常见错误
+    low = msg.lower()
+    if "timed out" in low or "timeout" in low or "超时" in m:
+        return "连接服务器超时，请检查网络后重试"
+    if "refused" in low or "积极拒绝" in m or "拒绝" in m:
+        return "无法连接服务器（服务可能维护中或网络不通）"
+    if "resolve" in low or "getaddrinfo" in low or "11001" in msg or "解析" in m or "dns" in low:
+        return "无法解析服务器地址，请检查网络"
+    if "ssl" in low or "证书" in m:
+        return "服务器安全连接异常，请稍后重试"
+    if "10060" in msg or "10061" in msg or "10065" in msg:
+        return "无法连接服务器（服务可能维护中或网络不通）"
+    if not m:
+        return "网络异常，请稍后重试"
+    return "网络异常：" + m[:80]
 
 
 class RankError(Exception):
@@ -68,7 +98,7 @@ class RankClient:
                                 "TOKEN_INVALID")
             raise RankError(f"请求失败({code}): {raw[:120]}")
         except Exception as exc:
-            raise RankError(f"无法连接服务器：{exc}", "NETWORK")
+            raise RankError(_friendly_net_error(exc), "NETWORK")
         try:
             j = json.loads(raw)
         except Exception:
@@ -177,7 +207,19 @@ def get_state():
 
 
 _state = {"board": None, "day": None, "my_rank": None, "my_tokens": None,
-          "last_time": None, "error": None, "token_invalid": False}
+          "last_time": None, "error": None, "token_invalid": False,
+          "error_streak": 0}
+
+
+def backoff_seconds():
+    """当前应等待的秒数：无错误 30s；连续失败按 30→60→120→240→300 封顶退避。
+
+    供 reporter 线程与排行榜页轮询共用，恢复成功后 streak 清零自动回到 30s。
+    """
+    streak = _state.get("error_streak") or 0
+    if streak <= 0:
+        return _REPORT_INTERVAL
+    return min(300, _REPORT_INTERVAL * (2 ** (streak - 1)))
 
 
 # ---------- 后台上报线程（30s，常驻） ----------
@@ -203,9 +245,13 @@ def _sync_once(c):
         _state["error"] = str(exc)
         if exc.code == "TOKEN_INVALID":
             _state["token_invalid"] = True
+        else:
+            # 网络/服务器错误才触发退避；401 登录失效不拉长轮询（等用户重登）
+            _state["error_streak"] = (_state.get("error_streak") or 0) + 1
         return False
     except Exception as exc:
-        _state["error"] = str(exc)
+        _state["error"] = _friendly_net_error(exc)
+        _state["error_streak"] = (_state.get("error_streak") or 0) + 1
         return False
     board = r.get("board") or []
     me = c.user or {}
@@ -216,6 +262,7 @@ def _sync_once(c):
     _state["my_tokens"] = total
     _state["last_time"] = time.strftime("%H:%M:%S")
     _state["error"] = None
+    _state["error_streak"] = 0
     _state["token_invalid"] = False
     return True
 
@@ -241,6 +288,7 @@ def start_reporter(interval_seconds=_REPORT_INTERVAL):
                     _sync_once(c)
             except Exception:
                 pass
-            time.sleep(max(5, int(interval_seconds)))
+            # 失败退避：连续失败间隔自动拉长（由 backoff_seconds 决定）
+            time.sleep(max(5, backoff_seconds()))
 
     threading.Thread(target=loop, daemon=True, name="rank-reporter").start()

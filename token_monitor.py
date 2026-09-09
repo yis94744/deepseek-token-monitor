@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.21"
+APP_VERSION = "1.13.22"
 
 
 # ================= 路径与资源 =================
@@ -1602,14 +1602,20 @@ class App:
 
         refresh()
 
-        # 页面常驻 30s 自轮询（榜每半分钟刷新一次；与 reporter 全局 30s 同步对齐）
+        # 页面常驻自轮询：网络失败自动退避（与 reporter 共用 backoff_seconds）
         def auto_poll():
             try:
                 self._rank_page_refresh()
             except Exception:
                 pass
-            self.root.after(30000, auto_poll)
-        self.root.after(30000, auto_poll)
+            try:
+                import rank_client as _rc
+                delay = _rc.backoff_seconds()
+            except Exception:
+                delay = 30000
+            self.root.after(delay * 1000, auto_poll)
+        import rank_client as _rc0
+        self.root.after(_rc0.backoff_seconds() * 1000, auto_poll)
 
         return refresh
 
@@ -1714,6 +1720,7 @@ class App:
                         r = c.board()
                         rc._state["board"] = r.get("board") or []
                         rc._state["day"] = r.get("day")
+                        rc._state["error_streak"] = 0
                         self.root.after(0, self._render_rank_board)
                     except rc.RankError as exc:
                         # 错误写到内存态，UI 立即反映（不让用户看"卡住"）
@@ -1721,10 +1728,8 @@ class App:
                         if exc.code == "TOKEN_INVALID":
                             rc._state["token_invalid"] = True
                         else:
-                            rc._state["error"] = f"网络/服务器错误：{exc}"
-                        self.root.after(0, self._render_rank_board)
-                    except Exception as exc:
-                        rc._state["error"] = f"无法连接服务器：{exc}"
+                            # 网络/服务器错误才触发退避；401 登录失效不拉长轮询
+                            rc._state["error_streak"] = (rc._state.get("error_streak") or 0) + 1
                         self.root.after(0, self._render_rank_board)
                 if sess.get("token"):
                     import threading
@@ -1746,7 +1751,7 @@ class App:
             err = st.get("error")
             t = st.get("last_time") or ""
             if err:
-                self.lbl_rank_hint.config(text=f"同步中（{err}）· 30s 自动更新")
+                self.lbl_rank_hint.config(text=f"同步中（{err}）")
             else:
                 self.lbl_rank_hint.config(
                     text=f"共 {len(board)} 人上榜 · 每 30s 同步{t and ' · 上次 ' + t}")
@@ -2823,6 +2828,8 @@ class App:
                     rank = st.get("my_rank") if st else None
                     if rank:
                         self.lbl_rank.config(text=f"排名 {nick} · 第{rank}名", fg=C_GOLD)
+                    elif st.get("error"):
+                        self.lbl_rank.config(text=f"排名 {nick} · 同步失败", fg="#f6d9ae")
                     else:
                         self.lbl_rank.config(text=f"排名 {nick} · 同步中", fg="#f6d9ae")
                 else:
