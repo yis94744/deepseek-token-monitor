@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pricing
 import yq_sync
 
-APPDATA = os.environ.get("APPDATA") or r"C:\Users\kelang\AppData\Roaming"
+APPDATA = (os.environ.get('APPDATA')
+           or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'))
 DB = sys.argv[1] if len(sys.argv) > 1 else os.path.join(APPDATA, "DeepSeekTokenMonitor", "data", "usage.db")
 CONFIG_PATH = os.path.join(APPDATA, "DeepSeekTokenMonitor", "config.json")
 
