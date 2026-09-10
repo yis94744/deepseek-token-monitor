@@ -12,6 +12,8 @@
   ],
   "weekend_offpeak_since": "2026-08-23",
   "legacy_until": "2026-08-17",
+  "v4_pro_retire_at": "2026-09-14 12:00",
+  "v4_pro_retire_model": "deepseek-v4.1-flash",
   "cc_switch": {
     "enabled": true,
     "db_path": "",
@@ -58,7 +60,7 @@
   },
   "models": {
     "deepseek-v4-flash": {
-      "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.05/未命中1.5/输出4.5；高峰 命中0.10/未命中3.0/输出9.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+      "note": "Flash 系列峰谷价。2026-09-10 12:00 起降价（空闲 命中0.02/未命中1/输出4，高峰翻倍）；8-17~9-10 空闲 0.05/1.5/4.5；8-17 前 legacy 0.02/1.0/2.0 元每百万tokens",
       "cache_hit": 0.05,
       "cache_miss": 1.5,
       "output": 4.5,
@@ -71,10 +73,74 @@
         "cache_hit": 0.02,
         "cache_miss": 1.0,
         "output": 2.0
+      },
+      "tiers": [
+        {
+          "since": "2026-09-10 12:00",
+          "cache_hit": 0.02,
+          "cache_miss": 1.0,
+          "output": 4.0,
+          "peak": {
+            "cache_hit": 0.04,
+            "cache_miss": 2.0,
+            "output": 8.0
+          }
+        }
+      ]
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "note": "V4 Flash 视觉实验版：与 deepseek-v4-flash 同价（2026-09-10 12:00 起 空闲 0.02/1/4，高峰翻倍）",
+      "cache_hit": 0.05,
+      "cache_miss": 1.5,
+      "output": 4.5,
+      "peak": {
+        "cache_hit": 0.10,
+        "cache_miss": 3.0,
+        "output": 9.0
+      },
+      "legacy": {
+        "cache_hit": 0.02,
+        "cache_miss": 1.0,
+        "output": 2.0
+      },
+      "tiers": [
+        {
+          "since": "2026-09-10 12:00",
+          "cache_hit": 0.02,
+          "cache_miss": 1.0,
+          "output": 4.0,
+          "peak": {
+            "cache_hit": 0.04,
+            "cache_miss": 2.0,
+            "output": 8.0
+          }
+        }
+      ]
+    },
+    "deepseek-v4.1-flash": {
+      "note": "V4.1 Flash（2026-09-10 前后发布）：空闲 命中0.02/未命中1/输出4，高峰翻倍 0.04/2/8 元每百万tokens；亦为 V4 Pro 下线后的计费模型",
+      "cache_hit": 0.02,
+      "cache_miss": 1.0,
+      "output": 4.0,
+      "peak": {
+        "cache_hit": 0.04,
+        "cache_miss": 2.0,
+        "output": 8.0
+      }
+    },
+    "deepseek-v4.1-flash-expires-on-0910": {
+      "note": "V4.1 Flash 内测临时端点（2026-09-10 到期）：按 Flash 系列新价计费",
+      "cache_hit": 0.02,
+      "cache_miss": 1.0,
+      "output": 4.0,
+      "peak": {
+        "cache_hit": 0.04,
+        "cache_miss": 2.0,
+        "output": 8.0
       }
     },
     "deepseek-v4-pro": {
-      "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.15/未命中4.5/输出13.5；高峰 命中0.30/未命中9.0/输出27.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+      "note": "V4 Pro 峰谷价（2026-08-17 生效）：空闲 命中0.15/未命中4.5/输出13.5；高峰 0.30/9.0/27.0。2026-09-14 12:00 下线后请求路由到 V4.1 Flash 并按 Flash 计费",
       "cache_hit": 0.15,
       "cache_miss": 4.5,
       "output": 13.5,

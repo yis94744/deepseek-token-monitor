@@ -7,10 +7,13 @@
 
 步骤：
 1. yq 会话按解析出的真实模型重归属（沿用 yq_sync 的模型解析）；
-2. 所有行（yq / cc / 代理）按 model + created_at 重新取价并重算 cost：
+2. 所有行（yq / cc / 代理）按 model + created_at 重新取价并重算 cost，
+   取价完全委托 pricing.get_price（含多段价 tiers 与峰谷判定）：
+   - 命中多段价 tiers → 该段价（2026-09-10 12:00 起 Flash 系列新价）；
    - 2026-08-17 之前 → legacy 平峰价；
-   - 高峰时段（默认每日 9:00-14:00）→ peak 价；
-   - 其余 → 空闲价。
+   - 工作日高峰 9:00-12:00 与 14:00-18:00 → peak 价（周末全天低谷）；
+   - 其余 → 空闲价；
+   - 2026-09-14 12:00 起 V4 Pro 行按 V4.1 Flash 计价（官方路由）。
 """
 import json
 import os
@@ -28,8 +31,11 @@ CONFIG_PATH = os.path.join(APPDATA, "DeepSeekTokenMonitor", "config.json")
 
 config = json.load(open(CONFIG_PATH, encoding="utf-8")) if os.path.isfile(CONFIG_PATH) else {}
 print("库:", DB)
-print("官网新价生效:", pricing._legacy_until(config).strftime("%Y-%m-%d"),
+print("旧价分界:", pricing._legacy_until(config).strftime("%Y-%m-%d"),
       "| 高峰时段:", pricing._peak_window(config))
+_retire_at, _retire_model = pricing._v4_pro_retire(config)
+if _retire_at is not None and _retire_model:
+    print("V4 Pro 下线:", _retire_at.strftime("%Y-%m-%d %H:%M"), "→ 按", _retire_model, "计费")
 
 con = sqlite3.connect(DB)
 cur = con.cursor()

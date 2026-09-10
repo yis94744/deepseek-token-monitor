@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.22"
+APP_VERSION = "1.13.23"
 
 
 # ================= 路径与资源 =================
@@ -129,9 +129,17 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "interval_hours": 6,
     },
+    # V4 Pro 下线（官方公告）：2026-09-14 12:00 起 V4 Pro 请求路由到 V4.1 Flash，
+    # 并按 V4.1 Flash 单价计费（见 pricing.resolve_model / get_price）
+    "v4_pro_retire_at": "2026-09-14 12:00",
+    "v4_pro_retire_model": "deepseek-v4.1-flash",
     "models": {
+        # ---- Flash 系列（deepseek-v4-flash / vision-exp 同价）----
+        # 2026-09-10 12:00 起降价：空闲 命中0.02/未命中1/输出4，高峰翻倍 0.04/2/8
+        # 2026-08-17~09-10：空闲 0.05/1.5/4.5，高峰 0.10/3.0/9.0
+        # 2026-08-17 之前：legacy 平峰 0.02/1.0/2.0
         "deepseek-v4-flash": {
-            "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.05/未命中1.5/输出4.5；高峰 命中0.10/未命中3.0/输出9.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+            "note": "Flash 系列峰谷价。2026-09-10 12:00 起降价（空闲 命中0.02/未命中1/输出4，高峰翻倍）；8-17~9-10 空闲 0.05/1.5/4.5；8-17 前 legacy 0.02/1.0/2.0 元每百万tokens",
             "cache_hit": 0.05,
             "cache_miss": 1.5,
             "output": 4.5,
@@ -144,10 +152,153 @@ DEFAULT_CONFIG = {
                 "cache_hit": 0.02,
                 "cache_miss": 1.0,
                 "output": 2.0
+            },
+            "tiers": [
+                {
+                    "since": "2026-09-10 12:00",
+                    "cache_hit": 0.02,
+                    "cache_miss": 1.0,
+                    "output": 4.0,
+                    "peak": {
+                        "cache_hit": 0.04,
+                        "cache_miss": 2.0,
+                        "output": 8.0
+                    }
+                }
+            ]
+        },
+        # Vision 实验版与 Flash 同价（官方价格表并列给出，调整后同为 0.02/1/4）
+        "deepseek-v4-flash-vision-exp": {
+            "note": "V4 Flash 视觉实验版：与 deepseek-v4-flash 同价（2026-09-10 12:00 起 空闲 0.02/1/4，高峰翻倍）",
+            "cache_hit": 0.05,
+            "cache_miss": 1.5,
+            "output": 4.5,
+            "peak": {
+                "cache_hit": 0.10,
+                "cache_miss": 3.0,
+                "output": 9.0
+            },
+            "legacy": {
+                "cache_hit": 0.02,
+                "cache_miss": 1.0,
+                "output": 2.0
+            },
+            "tiers": [
+                {
+                    "since": "2026-09-10 12:00",
+                    "cache_hit": 0.02,
+                    "cache_miss": 1.0,
+                    "output": 4.0,
+                    "peak": {
+                        "cache_hit": 0.04,
+                        "cache_miss": 2.0,
+                        "output": 8.0
+                    }
+                }
+            ]
+        },
+        # V4.1 Flash：2026-09-10 前后正式发布，定价同 Flash 系列新价；
+        # V4 Pro 下线后按此模型计费
+        "deepseek-v4.1-flash": {
+            "note": "V4.1 Flash（2026-09-10 前后发布）：2026-09-10 12:00 起空闲 命中0.02/未命中1/输出4，高峰翻倍 0.04/2/8；此前按当时 Flash 系列价（0.05/1.5/4.5）。亦为 V4 Pro 下线后的计费模型",
+            "cache_hit": 0.05,
+            "cache_miss": 1.5,
+            "output": 4.5,
+            "peak": {
+                "cache_hit": 0.10,
+                "cache_miss": 3.0,
+                "output": 9.0
+            },
+            "tiers": [
+                {
+                    "since": "2026-09-10 12:00",
+                    "cache_hit": 0.02,
+                    "cache_miss": 1.0,
+                    "output": 4.0,
+                    "peak": {
+                        "cache_hit": 0.04,
+                        "cache_miss": 2.0,
+                        "output": 8.0
+                    }
+                }
+            ]
+        },
+        # 官方 API 别名：带版本号后缀的模型名（change log 中的实际模型 ID）
+        # deepseek-v4-flash-0731 = V4-Flash-0731（当前 deepseek-v4-flash 对应版本）
+        "deepseek-v4-flash-0731": {
+            "note": "V4-Flash-0731（deepseek-v4-flash 的实际版本 ID）：与 Flash 系列同价",
+            "cache_hit": 0.05,
+            "cache_miss": 1.5,
+            "output": 4.5,
+            "peak": {
+                "cache_hit": 0.10,
+                "cache_miss": 3.0,
+                "output": 9.0
+            },
+            "legacy": {
+                "cache_hit": 0.02,
+                "cache_miss": 1.0,
+                "output": 2.0
+            },
+            "tiers": [
+                {
+                    "since": "2026-09-10 12:00",
+                    "cache_hit": 0.02,
+                    "cache_miss": 1.0,
+                    "output": 4.0,
+                    "peak": {
+                        "cache_hit": 0.04,
+                        "cache_miss": 2.0,
+                        "output": 8.0
+                    }
+                }
+            ]
+        },
+        # deepseek-v4-pro-0813 = V4-Pro-0813（V4 Pro 正式版）：按 Pro 价，
+        # 09-14 12:00 下线后同样路由到 V4.1 Flash
+        "deepseek-v4-pro-0813": {
+            "note": "V4-Pro-0813（V4 Pro 正式版实际 ID）：按 V4 Pro 峰谷价；09-14 12:00 下线后按 V4.1 Flash 计费",
+            "cache_hit": 0.15,
+            "cache_miss": 4.5,
+            "output": 13.5,
+            "peak": {
+                "cache_hit": 0.30,
+                "cache_miss": 9.0,
+                "output": 27.0
+            },
+            "legacy": {
+                "cache_hit": 0.025,
+                "cache_miss": 3.0,
+                "output": 6.0
             }
         },
+        # 内测临时端点（2026-09-10 到期），定价同 Flash 系列
+        "deepseek-v4.1-flash-expires-on-0910": {
+            "note": "V4.1 Flash 内测临时端点（2026-09-10 到期）：内测期间按当时 Flash 系列价（0.05/1.5/4.5）计费；2026-09-10 12:00 起按新价 0.02/1/4",
+            "cache_hit": 0.05,
+            "cache_miss": 1.5,
+            "output": 4.5,
+            "peak": {
+                "cache_hit": 0.10,
+                "cache_miss": 3.0,
+                "output": 9.0
+            },
+            "tiers": [
+                {
+                    "since": "2026-09-10 12:00",
+                    "cache_hit": 0.02,
+                    "cache_miss": 1.0,
+                    "output": 4.0,
+                    "peak": {
+                        "cache_hit": 0.04,
+                        "cache_miss": 2.0,
+                        "output": 8.0
+                    }
+                }
+            ]
+        },
         "deepseek-v4-pro": {
-            "note": "官网峰谷价（2026-08-17 生效）：空闲 命中0.15/未命中4.5/输出13.5；高峰 命中0.30/未命中9.0/输出27.0 元每百万tokens；8-17 之前按 legacy 平峰价",
+            "note": "V4 Pro 峰谷价（2026-08-17 生效）：空闲 命中0.15/未命中4.5/输出13.5；高峰 0.30/9.0/27.0。2026-09-14 12:00 下线后请求路由到 V4.1 Flash 并按 Flash 计费",
             "cache_hit": 0.15,
             "cache_miss": 4.5,
             "output": 13.5,
@@ -192,6 +343,19 @@ def _merge_default_config(config: dict) -> bool:
                 if not old.get(key) and entry.get(key):
                     old[key] = entry[key]
                     changed = True
+            # 多段价（tiers）补齐：老配置没有 tiers 时补上默认段
+            # （仅补"缺失的 since 段"，不覆盖用户已有的同 since 自定义段）
+            if entry.get("tiers"):
+                have = {str(t.get("since")) for t in (old.get("tiers") or []) if isinstance(t, dict)}
+                for tier in entry["tiers"]:
+                    if str(tier.get("since")) not in have:
+                        old.setdefault("tiers", []).append(dict(tier))
+                        changed = True
+    # V4 Pro 下线路由配置补齐（官方 2026-09-14 12:00 起路由到 V4.1 Flash 计费）
+    for key in ("v4_pro_retire_at", "v4_pro_retire_model"):
+        if key not in config:
+            config[key] = DEFAULT_CONFIG.get(key)
+            changed = True
     # 高峰窗口迁移：旧格式单段 {start_hour,end_hour}（错误窗口 9-14）→ 官方双段 [[9,12],[14,18]]
     ph = config.get("peak_hours")
     if isinstance(ph, dict):
