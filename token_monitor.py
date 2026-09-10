@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.23"
+APP_VERSION = "1.13.24"
 
 
 # ================= 路径与资源 =================
@@ -3227,43 +3227,167 @@ class App:
     def _install_update(self, new_exe: str, is_setup: bool = False, tag: str = ""):
         """下载完后引导安装并自动重启。
 
-        - is_setup=True：直接启动 setup 安装包（含 VC 运行库，含完整安装逻辑）
+        - is_setup=True：静默安装 + 延迟自启（见 _run_setup_delayed）
         - is_setup=False（便携版覆盖）：等旧程序退出 → 用新 exe 覆盖当前目录 exe → 重启
+
+        重要（v1.13.24 修复）：旧实现是"先 Popen(setup) 再 quit()"，会在
+        旧进程尚未完全退出时就让 Inno 安装并立即拉起新版；新版 onefile 需解包
+        ~1000 个文件，而 python313.dll 排在解包清单 98.4% 处，一旦解包被
+        （杀软扫描刚覆盖的 exe / 旧进程残留句柄）打断，就会弹出
+        "Failed to load Python DLL ... LoadLibrary: 找不到指定的模块"
+        （Windows 在目标文件不存在时即返回 126）。新实现改为：
+        先退出自己 → 独立等待器确认进程消失且文件稳定 → 静默安装 →
+        延迟后再启动新版，彻底避开该竞争窗口。
         """
         try:
             if is_setup:
-                # setup：直接启动安装包。Setup 是 Inno 安装器，安装时 Inno 会停旧进程、装新文件
-                # 到 Program Files、并在 [Run] 自动启动新版（装完即覆盖旧版）。
-                # 启动安装包前先停掉本进程（Inno 会自检旧进程）
-                # 启动安装包（脱离当前 Tk 进程，确保 quit 后仍继续）
-                import subprocess as _sp
-                _sp.Popen([new_exe], creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
-                self.quit()  # 退出当前程序（让 Inno 接管覆盖/装新）
+                # setup 分支：先挂起独立等待器，再退出自己（quit 在函数末尾统一执行）
+                self._run_setup_delayed(new_exe, tag)
+                self.quit()
                 return
 
-            # 便携版：旧程序退出后用新 exe 就地覆盖并重启（保留原行为）
+            # 便携版：旧程序退出后用新 exe 就地覆盖并重启
+            # v1.13.24 同样加"覆盖后延迟再启动"：Copy-Item 刚写完 26MB exe 时
+            # 杀软正在实时扫描，若立即启动，onefile 解包会被打断，导致
+            # python313.dll 未解出而报 "找不到指定的模块"。
             target_dir = os.path.dirname(os.path.abspath(sys.executable))
             target_exe = os.path.join(target_dir, "DeepSeekTokenMonitor.exe")
             update_dir = os.path.dirname(new_exe)
-            script = os.path.join(update_dir, "run_update.ps1")
-            with open(script, "w", encoding="utf-8") as f:
+            # 脚本放到 DATA_DIR：避免脚本删除 update_dir 时删到自己
+            script = os.path.join(DATA_DIR, "run_portable_update.ps1")
+            log = os.path.join(DATA_DIR, "update_run.log")
+            with open(script, "w", encoding="utf-8-sig") as f:
                 f.write("$ErrorActionPreference = 'SilentlyContinue'\n")
-                f.write("# 等旧程序完全退出，释放 exe 占用，再就地覆盖并重启\n")
+                f.write("function Log($m) {\n")
+                f.write("  $t = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')\n")
+                f.write("  Add-Content -Path '%s' -Value ($t + ' ' + $m) -Encoding UTF8\n"
+                        % log)
+                f.write("}\n")
+                f.write("function Old-Alive {\n")
+                f.write("  $n = @(Get-CimInstance Win32_Process "
+                        "-Filter \"Name='DeepSeekTokenMonitor.exe'\" "
+                        "-ErrorAction SilentlyContinue | "
+                        "Where-Object { $_.ExecutablePath -eq '%s' })\n" % target_exe)
+                f.write("  return $n.Count\n")
+                f.write("}\n")
+                f.write("Log ('portable: waiting for old process, count=' + (Old-Alive))\n")
                 f.write("for ($i = 0; $i -lt 60; $i++) {\n")
-                f.write("  if (-not (Get-Process DeepSeekTokenMonitor -ErrorAction "
-                        "SilentlyContinue)) { break }\n")
+                f.write("  if ((Old-Alive) -eq 0) { break }\n")
                 f.write("  Start-Sleep -Seconds 1\n}\n")
+                f.write("Start-Sleep -Seconds 2\n")
+                f.write("Log 'portable: copying new exe'\n")
                 f.write("Copy-Item -Path '%s' -Destination '%s' -Force\n"
                         % (new_exe, target_exe))
-                f.write("Start-Process -FilePath '%s'\n" % target_exe)
-                f.write("Remove-Item -Path '%s' -Recurse -Force\n" % update_dir)
+                f.write("Log 'portable: waiting for AV scan window'\n")
+                f.write("Start-Sleep -Seconds 8\n")
+                f.write("Log 'portable: starting new version'\n")
+                f.write("for ($r = 1; $r -le 3; $r++) {\n")
+                f.write("  Start-Process -FilePath '%s'\n" % target_exe)
+                f.write("  Start-Sleep -Seconds 20\n")
+                f.write("  $q = @(Get-CimInstance Win32_Process "
+                        "-Filter \"Name='DeepSeekTokenMonitor.exe'\" "
+                        "-ErrorAction SilentlyContinue | "
+                        "Where-Object { $_.ExecutablePath -eq '%s' })\n" % target_exe)
+                f.write("  if ($q.Count -gt 0) { Log ('portable: started OK ' + $r); "
+                        "break }\n")
+                f.write("  Log ('portable: attempt ' + $r + ' failed, retrying')\n")
+                f.write("  Start-Sleep -Seconds 5\n")
+                f.write("}\n")
+                f.write("Log 'portable: done'\n")
             subprocess.Popen(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
                  "-WindowStyle", "Hidden", "-File", script],
+                # 只用 CREATE_NO_WINDOW（DETACHED_PROCESS 会导致子进程立即退出）
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:
             pass
         self.quit()
+
+    def _run_setup_delayed(self, setup_exe: str, tag: str = ""):
+        """静默安装新版并延迟自启（避开 onefile 解包被中断导致 DLL 加载失败）。
+
+        时序（每一步都验证前一步真的完成了才继续）：
+          1. 写一个独立的 PowerShell 等待器（分离进程，本进程退出后仍存活）
+          2. 启动该等待器
+          3. 本进程 quit()，释放 exe 句柄
+          4. 等待器：轮询直到 DeepSeekTokenMonitor 进程全部消失（最多 60 秒）
+          5. 等待器：静默运行 setup（/SILENT /SUPPRESSMSGBOXES /NORESTART）
+          6. 等待器：再等 5 秒让杀软完成对刚写入文件的扫描
+          7. 等待器：启动安装目录下的新版 exe
+          8. 等待器：确认新版进程存活；失败则重试一次
+
+        关键点：新版是在"旧进程已消失 + 安装完成 + 杀软扫描窗口已过"之后
+        才启动的，因此 onefile 解包不会再被抢占/扫描打断。
+        """
+        try:
+            import subprocess as _sp
+            update_dir = os.path.dirname(setup_exe)
+            # 脚本放在 DATA_DIR（而非 _update 目录）：等待器结束前会删除 _update
+            # 目录，若脚本自身位于其中，会存在"自我删除"风险。
+            script = os.path.join(DATA_DIR, "run_setup_update.ps1")
+            # 新版安装路径：优先从卸载注册表项读取真实安装目录（用户可能自定义过），
+            # 读不到再退回默认目录。写死默认目录会导致"自定义路径安装的用户
+            # 更新后软件不启动"。
+            installed_exe = _installed_exe_path()
+            # 旧版 exe 的完整路径：等待器按【路径】而非【进程名】匹配。
+            # 按名匹配会把用户另开的实例也算进来，导致白等 60 秒超时（已实测）。
+            old_exe = os.path.abspath(sys.executable)
+            log = os.path.join(DATA_DIR, "update_run.log")
+            ps = (
+                "$ErrorActionPreference = 'SilentlyContinue'\n"
+                "function Log($m) {\n"
+                "  $t = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')\n"
+                "  Add-Content -Path '%(log)s' -Value ($t + ' ' + $m) -Encoding UTF8\n"
+                "}\n"
+                "function Old-Alive {\n"
+                "  $n = @(Get-CimInstance Win32_Process -Filter \"Name='DeepSeekTokenMonitor.exe'\" "
+                "-ErrorAction SilentlyContinue | "
+                "Where-Object { $_.ExecutablePath -eq '%(oldexe)s' })\n"
+                "  return $n.Count\n"
+                "}\n"
+                "Log ('waiting for old process to exit, count=' + (Old-Alive))\n"
+                "for ($i = 0; $i -lt 60; $i++) {\n"
+                "  if ((Old-Alive) -eq 0) { break }\n"
+                "  Start-Sleep -Seconds 1\n}\n"
+                "Log ('old process gone after ' + $i + 's')\n"
+                "Start-Sleep -Seconds 3\n"
+                "Log 'running setup silently'\n"
+                "Start-Process -FilePath '%(setup)s' "
+                "-ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCANCEL' -Wait\n"
+                "Log 'setup finished, waiting for AV scan window'\n"
+                "Start-Sleep -Seconds 8\n"
+                "Log 'starting new version'\n"
+                "for ($r = 1; $r -le 3; $r++) {\n"
+                "  if (Test-Path '%(target)s') {\n"
+                "    Start-Process -FilePath '%(target)s'\n"
+                "    Start-Sleep -Seconds 20\n"
+                "    $q = @(Get-CimInstance Win32_Process "
+                "-Filter \"Name='DeepSeekTokenMonitor.exe'\" -ErrorAction SilentlyContinue | "
+                "Where-Object { $_.ExecutablePath -eq '%(target)s' })\n"
+                "    if ($q.Count -gt 0) { Log ('new version started OK (attempt ' + $r + ')'); break }\n"
+                "    Log ('attempt ' + $r + ' did not survive, retrying')\n"
+                "    Start-Sleep -Seconds 5\n"
+                "  } else {\n"
+                "    Log 'target exe missing'; Start-Sleep -Seconds 5\n"
+                "  }\n"
+                "}\n"
+                "Log 'cleaning update dir'\n"
+                "Remove-Item -Path '%(upd)s' -Recurse -Force -ErrorAction SilentlyContinue\n"
+                "Log 'done'\n"
+            ) % {"log": log, "setup": setup_exe, "target": installed_exe,
+                 "upd": update_dir, "oldexe": old_exe}
+            with open(script, "w", encoding="utf-8-sig") as f:
+                f.write(ps)
+            _sp.Popen(
+                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                 "-WindowStyle", "Hidden", "-File", script],
+                # 只用 CREATE_NO_WINDOW：实测 DETACHED_PROCESS 会让该子进程
+                # 立即退出（等待器根本不会执行），必须避免。
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
+                close_fds=True)
+            updater._log("已启动延迟更新器，静默安装 %s 后自动重启" % (tag or ""))
+        except Exception as exc:
+            updater._log("启动延迟更新器失败: %s" % exc)
 
     def _check_update_now(self):
         """设置页按钮：立即检查更新。"""
@@ -3361,6 +3485,43 @@ class App:
         save_settings(self.settings)  # 显式持久化运行设置（含各数据源同步游标）
         self.stop_event.set()
         self.root.destroy()
+
+
+def _installed_exe_path() -> str:
+    """返回安装版 exe 的完整路径（供更新等待器启动新版用）。
+
+    优先从 Inno 卸载注册表项读取真实安装目录（用户安装时可能改过路径），
+    读不到再退回默认位置 %LOCALAPPDATA%/Programs/DeepSeekTokenMonitor。
+    """
+    default = os.path.join(
+        os.environ.get("LOCALAPPDATA") or APPDATA_DIR,
+        "Programs", "DeepSeekTokenMonitor", "DeepSeekTokenMonitor.exe")
+    try:
+        import winreg
+        # Inno 的卸载项：HKCUSoftwareMicrosoftWindowsCurrentVersionUninstall<AppId>_is1
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for view in (0, getattr(winreg, "KEY_WOW64_32KEY", 0),
+                         getattr(winreg, "KEY_WOW64_64KEY", 0)):
+                try:
+                    key = winreg.OpenKey(
+                        hive,
+                        r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+                        r"\{A7E33F1C-4D2B-4C6E-9F8B-2B5A0C77A8D1}_is1",
+                        0, winreg.KEY_READ | view)
+                except OSError:
+                    continue
+                try:
+                    loc, _ = winreg.QueryValueEx(key, "InstallLocation")
+                except OSError:
+                    loc = ""
+                winreg.CloseKey(key)
+                if loc:
+                    cand = os.path.join(loc, "DeepSeekTokenMonitor.exe")
+                    if os.path.isfile(cand):
+                        return cand
+    except Exception:
+        pass
+    return default
 
 
 def main():
