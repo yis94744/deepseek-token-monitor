@@ -161,8 +161,61 @@ def resolve_model(model: str, config: dict, ts=None) -> str:
     return model
 
 
+def _entry_of(model: str, config: dict, ts=None) -> dict:
+    """取模型的价格条目（含下线路由与兜底），供取价函数共用。"""
+    models = config.get("models", {})
+    model = resolve_model(model, config, ts)
+    entry = models.get(model) or {}
+    if not entry:
+        fallback = config.get("unknown_model_fallback", "")
+        entry = models.get(fallback, {})
+    return entry
+
+
+def _tier_at(entry: dict, ts) -> dict:
+    """取 ts 所在的多段价段（无 tiers 则返回 {}）。"""
+    if ts is None:
+        return {}
+    tier = _pick_tier(entry, ts)
+    return tier if isinstance(tier, dict) else {}
+
+
+def get_price_pair(model: str, config: dict, ts=None) -> tuple:
+    """取该模型在 ts 时刻的（空闲价, 高峰价）两档单价。
+
+    用于界面展示：让用户一眼看到当前定价规则的两档数字，
+    与 get_price 走同一套 tiers/legacy 判定，保证显示与实际计费一致。
+
+    返回 (off_peak, peak)：两个 dict，各含 cache_hit/cache_miss/output。
+    当该模型在 ts 时刻不区分峰谷（如周末全天低谷、或未配置 peak）时，
+    两档返回同一个 dict（此时高峰价 = 空闲价）。
+    """
+    entry = _entry_of(model, config, ts)
+    # 1) 先定位当前生效的价段：tiers 段优先，其次 legacy（旧平峰价），否则基准价
+    tier = _tier_at(entry, ts)
+    if tier:
+        base = tier
+    elif ts is not None and ts < _legacy_until(config):
+        legacy = entry.get("legacy") or {}
+        base = legacy if legacy.get("cache_miss") is not None else entry
+    else:
+        base = entry
+    off = {"cache_hit": base.get("cache_hit"), "cache_miss": base.get("cache_miss"),
+           "output": base.get("output")}
+    # 2) 高峰价：优先取该段自己的 peak 子表；否则退回条目级 peak；再否则同空闲价
+    peak_tbl = (base.get("peak") or {}) if isinstance(base, dict) else {}
+    if peak_tbl.get("cache_miss") is None:
+        peak_tbl = entry.get("peak") or {}
+    if peak_tbl.get("cache_miss") is None:
+        return off, dict(off)
+    pk = {"cache_hit": peak_tbl.get("cache_hit"), "cache_miss": peak_tbl.get("cache_miss"),
+          "output": peak_tbl.get("output")}
+    # 3) 周末/非高峰规则不影响两档展示：始终给出两档数字
+    return off, pk
+
+
 def get_price(model: str, config: dict, ts=None) -> dict:
-    """按时间取模型单价表：
+    """按时间取模型单价表（实际计费用）：
 
     取价优先级（先命中先返回）：
     1. ts 命中多段价 tiers（since 不晚于 ts 的最后一段）→ 该段价（含其 peak 子表）
@@ -172,16 +225,13 @@ def get_price(model: str, config: dict, ts=None) -> dict:
 
     V4 Pro 下线后（默认 2026-09-14 12:00）自动按替代模型（V4.1 Flash）计价。
     遇到未配置的模型时按兜底模型计价，避免漏计费。
+
+    界面展示请改用 get_price_pair（同时拿到空闲/高峰两档）。
     """
-    models = config.get("models", {})
-    model = resolve_model(model, config, ts)
-    entry = models.get(model) or {}
-    if not entry:
-        fallback = config.get("unknown_model_fallback", "")
-        entry = models.get(fallback, {})
+    entry = _entry_of(model, config, ts)
     if ts is not None:
-        tier = _pick_tier(entry, ts)
-        if tier is not None:
+        tier = _tier_at(entry, ts)
+        if tier:
             # 多段价：段内仍区分峰谷（段的 peak 子表可选）
             if is_peak_hour(ts, config):
                 peak = tier.get("peak") or {}

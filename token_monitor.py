@@ -36,7 +36,7 @@ import workbuddy_sync
 import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.24"
+APP_VERSION = "1.13.25"
 
 
 # ================= 路径与资源 =================
@@ -226,6 +226,7 @@ DEFAULT_CONFIG = {
         # 官方 API 别名：带版本号后缀的模型名（change log 中的实际模型 ID）
         # deepseek-v4-flash-0731 = V4-Flash-0731（当前 deepseek-v4-flash 对应版本）
         "deepseek-v4-flash-0731": {
+            "deprecated": True,  # 已停用：8-28~9-1 的旧快照，此后无新请求；价格保留供历史记录计费
             "note": "V4-Flash-0731（deepseek-v4-flash 的实际版本 ID）：与 Flash 系列同价",
             "cache_hit": 0.05,
             "cache_miss": 1.5,
@@ -257,6 +258,7 @@ DEFAULT_CONFIG = {
         # deepseek-v4-pro-0813 = V4-Pro-0813（V4 Pro 正式版）：按 Pro 价，
         # 09-14 12:00 下线后同样路由到 V4.1 Flash
         "deepseek-v4-pro-0813": {
+            "deprecated": True,  # 已停用：8-28 的旧快照，此后无新请求；价格保留供历史记录计费
             "note": "V4-Pro-0813（V4 Pro 正式版实际 ID）：按 V4 Pro 峰谷价；09-14 12:00 下线后按 V4.1 Flash 计费",
             "cache_hit": 0.15,
             "cache_miss": 4.5,
@@ -274,6 +276,7 @@ DEFAULT_CONFIG = {
         },
         # 内测临时端点（2026-09-10 到期），定价同 Flash 系列
         "deepseek-v4.1-flash-expires-on-0910": {
+            "deprecated": True,  # 已停用：内测端点 2026-09-10 到期；价格保留供历史记录计费
             "note": "V4.1 Flash 内测临时端点（2026-09-10 到期）：内测期间按当时 Flash 系列价（0.05/1.5/4.5）计费；2026-09-10 12:00 起按新价 0.02/1/4",
             "cache_hit": 0.05,
             "cache_miss": 1.5,
@@ -351,6 +354,11 @@ def _merge_default_config(config: dict) -> bool:
                     if str(tier.get("since")) not in have:
                         old.setdefault("tiers", []).append(dict(tier))
                         changed = True
+            # 停用标记同步：默认配置标记为 deprecated 的模型（已下线/已过期端点）
+            # 在用户配置里也补上，使其不再出现在单价表（价格保留供历史计费）。
+            if entry.get("deprecated") and not old.get("deprecated"):
+                old["deprecated"] = True
+                changed = True
     # V4 Pro 下线路由配置补齐（官方 2026-09-14 12:00 起路由到 V4.1 Flash 计费）
     for key in ("v4_pro_retire_at", "v4_pro_retire_model"):
         if key not in config:
@@ -2040,12 +2048,39 @@ class App:
         right.pack(side="right", fill="both", padx=(0, 14), pady=12)
         tk.Label(right, text="内置单价（元/百万 tokens）", bg=C_BG, fg=C_BROWN_DARK,
                  font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 4))
-        tree = ttk.Treeview(right, columns=("model", "hit", "miss", "out"), show="headings")
+        # 两档并列显示：空闲 / 高峰。数字由 pricing.get_price_pair 提供，
+        # 与实际计费同源，避免"显示旧价、实收新价"的偏差。
+        tree = ttk.Treeview(right, columns=("model", "hit", "miss", "out"),
+                            show="headings")
         for col, text in zip(("model", "hit", "miss", "out"),
                              ("模型", "输入·命中", "输入·未命中", "输出")):
             tree.heading(col, text=text)
-        for col, width in zip(("model", "hit", "miss", "out"), (170, 90, 100, 80)):
+        for col, width in zip(("model", "hit", "miss", "out"), (150, 150, 160, 130)):
             tree.column(col, width=width, anchor="center" if col != "model" else "w")
+
+        def _fmt(off, peak, key):
+            """把同一档位的空闲/高峰数字格式化为 '空闲 / 高峰'。"""
+            o = off.get(key)
+            p = peak.get(key)
+            if o is None:
+                return "-"
+            if p is None or abs(float(p) - float(o)) < 1e-12:
+                return str(o)          # 该模型此档不分峰谷
+            return "%s / %s" % (o, p)
+
+        def _band_label():
+            """按当前时刻标注哪一档正在生效（工作日高峰 / 空闲）。"""
+            try:
+                if pricing.is_peak_hour(datetime.now(), self.config):
+                    return "（当前为高峰时段，按右侧数字计费）"
+                return "（当前为空闲时段，按左侧数字计费）"
+            except Exception:
+                return ""
+
+        # pack 顺序即上下顺序：标题 → 档位说明 → 表格 → 吉祥物
+        lbl_band = tk.Label(right, text="空闲 / 高峰" + _band_label(), bg=C_BG, fg=C_SUB,
+                            font=(FONT, 8))
+        lbl_band.pack(anchor="w", pady=(0, 2))
         tree.pack(fill="both", expand=True)
         self._price_tree = tree
         mascot = self._keep_image(_res("deco1.gif"), subsample=7)
@@ -2054,10 +2089,21 @@ class App:
         def refresh():
             for item in tree.get_children():
                 tree.delete(item)
-            for model, price in (self.config.get("models") or {}).items():
+            now_ts = datetime.now()
+            for model, entry in (self.config.get("models") or {}).items():
+                if (entry or {}).get("deprecated"):
+                    continue  # 已停用模型：价格仍保留供历史记录计费，但不在单价表展示
+                try:
+                    off, peak = pricing.get_price_pair(model, self.config, now_ts)
+                except Exception:
+                    off, peak = (entry or {}), {}
                 tree.insert("", "end", values=(
-                    model, price.get("cache_hit", 0), price.get("cache_miss", 0),
-                    price.get("output", 0)))
+                    model, _fmt(off, peak, "cache_hit"),
+                    _fmt(off, peak, "cache_miss"), _fmt(off, peak, "output")))
+            try:
+                lbl_band.config(text="空闲 / 高峰" + _band_label())
+            except Exception:
+                pass
             # 代理状态
             if self.state.get("proxy_error"):
                 self.lbl_setting_proxy.config(text="本地代理：启动失败 " + self.state["proxy_error"],
