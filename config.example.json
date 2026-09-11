@@ -224,6 +224,102 @@
         "cache_miss": 3.0,
         "output": 6.0
       }
+    },
+    "glm-5.3-flash": {
+      "note": "智谱 GLM-5.3-Flash（原生多模态）；官方美元价 命中$0.03/未命中$0.05/输出$0.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 0.2032,
+      "cache_miss": 0.3387,
+      "output": 1.3549,
+      "usd_price": {
+        "cache_hit": 0.03,
+        "cache_miss": 0.05,
+        "output": 0.2
+      },
+      "fx_rate": 6.7743
+    },
+    "glm-5.3": {
+      "note": "智谱 GLM-5.3（旗舰）；官方美元价 命中$0.26/未命中$0.7/输出$2.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 1.7613,
+      "cache_miss": 4.742,
+      "output": 14.9035,
+      "usd_price": {
+        "cache_hit": 0.26,
+        "cache_miss": 0.7,
+        "output": 2.2
+      },
+      "fx_rate": 6.7743
+    },
+    "glm-5.2": {
+      "note": "智谱 GLM-5.2；官方美元价 命中$0.26/未命中$0.7/输出$2.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 1.7613,
+      "cache_miss": 4.742,
+      "output": 14.9035,
+      "usd_price": {
+        "cache_hit": 0.26,
+        "cache_miss": 0.7,
+        "output": 2.2
+      },
+      "fx_rate": 6.7743
+    },
+    "gpt-5.6-luna": {
+      "note": "OpenAI GPT-5.6 Luna；官方美元价 命中$0.02/未命中$0.2/输出$1.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 0.1355,
+      "cache_miss": 1.3549,
+      "output": 8.1292,
+      "usd_price": {
+        "cache_hit": 0.02,
+        "cache_miss": 0.2,
+        "output": 1.2
+      },
+      "fx_rate": 6.7743
+    },
+    "gpt-5.6-terra": {
+      "note": "OpenAI GPT-5.6 Terra；官方美元价 命中$0.2/未命中$2.0/输出$12.0 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 1.3549,
+      "cache_miss": 13.5486,
+      "output": 81.2916,
+      "usd_price": {
+        "cache_hit": 0.2,
+        "cache_miss": 2.0,
+        "output": 12.0
+      },
+      "fx_rate": 6.7743
+    },
+    "gpt-5.5": {
+      "note": "OpenAI GPT-5.5；官方美元价 命中$0.5/未命中$5.0/输出$30.0 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 3.3872,
+      "cache_miss": 33.8715,
+      "output": 203.229,
+      "usd_price": {
+        "cache_hit": 0.5,
+        "cache_miss": 5.0,
+        "output": 30.0
+      },
+      "fx_rate": 6.7743
+    },
+    "gpt-5.4-mini": {
+      "note": "OpenAI GPT-5.4 Mini；官方美元价 命中$0.08/未命中$0.75/输出$4.5 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 0.5419,
+      "cache_miss": 5.0807,
+      "output": 30.4843,
+      "usd_price": {
+        "cache_hit": 0.08,
+        "cache_miss": 0.75,
+        "output": 4.5
+      },
+      "fx_rate": 6.7743
+    },
+    "codex-auto-review": {
+      "note": "Codex 自动代码审查（按 GPT-5.5 同级计价）；官方美元价 命中$0.25/未命中$5.0/输出$30.0 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+      "cache_hit": 1.6936,
+      "cache_miss": 33.8715,
+      "output": 203.229,
+      "usd_price": {
+        "cache_hit": 0.25,
+        "cache_miss": 5.0,
+        "output": 30.0
+      },
+      "fx_rate": 6.7743
     }
   }
 }
