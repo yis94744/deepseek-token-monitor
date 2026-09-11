@@ -35,7 +35,7 @@ import updater
 import workbuddy_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.27"
+APP_VERSION = "1.13.28"
 
 
 # ================= 路径与资源 =================
@@ -3019,6 +3019,80 @@ class App:
                     text=f"CC Switch 同步：运行中 · 累计导入 {fmt_int(cc.get('total_added', 0))} 条"
                          f" · {cc.get('last_time', '')}", fg=C_GREEN)
 
+        # 4.75) DSH Harness 数据同步状态
+        if hasattr(self, "lbl_dshsync"):
+            dsh = self.state.get("dsh_sync")
+            if not dsh or not dsh.get("enabled"):
+                self.lbl_dshsync.config(text="DSH Harness 同步：未启用", fg=C_SUB)
+            elif dsh.get("error"):
+                self.lbl_dshsync.config(
+                    text="DSH Harness 同步：读取失败 " + str(dsh["error"]), fg=C_RED)
+            else:
+                self.lbl_dshsync.config(
+                    text=f"DSH Harness 同步：运行中 · 累计导入 {fmt_int(dsh.get('total_added', 0))} 条"
+                         f" · {dsh.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.8) CodeBuddy 数据同步状态
+        if hasattr(self, "lbl_codebuddysync"):
+            cb = self.state.get("codebuddy_sync")
+            if not cb or not cb.get("enabled"):
+                self.lbl_codebuddysync.config(text="CodeBuddy 同步：未启用", fg=C_SUB)
+            elif cb.get("error"):
+                self.lbl_codebuddysync.config(
+                    text="CodeBuddy 同步：读取失败 " + str(cb["error"]), fg=C_RED)
+            else:
+                self.lbl_codebuddysync.config(
+                    text=f"CodeBuddy 同步：运行中 · 累计导入 {fmt_int(cb.get('total_added', 0))} 条"
+                         f" · {cb.get('last_time', '')}", fg=C_GREEN)
+
+        # 4.9) WorkBuddy 数据同步状态
+        if hasattr(self, "lbl_workbuddysync"):
+            wb = self.state.get("workbuddy_sync")
+            if not wb or not wb.get("enabled"):
+                self.lbl_workbuddysync.config(text="WorkBuddy 同步：未启用", fg=C_SUB)
+            elif wb.get("error"):
+                self.lbl_workbuddysync.config(
+                    text="WorkBuddy 同步：读取失败 " + str(wb["error"]), fg=C_RED)
+            else:
+                self.lbl_workbuddysync.config(
+                    text=f"WorkBuddy 同步：运行中 · 累计导入 {fmt_int(wb.get('total_added', 0))} 条"
+                         f" · {wb.get('last_time', '')}", fg=C_GREEN)
+
+        # 5) 日期与仪表盘图表
+        self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))
+        # 5.1) 排名状态按钮：随登录态与名次刷新
+        try:
+            if hasattr(self, "lbl_rank"):
+                import rank_client as _rc
+                sess = _rc.load_session()
+                st = _rc.get_state()
+                if sess.get("token"):
+                    me = sess.get("user") or {}
+                    nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
+                    rank = st.get("my_rank") if st else None
+                    if rank:
+                        self.lbl_rank.config(text=f"排名 {nick} · 第{rank}名", fg=C_GOLD)
+                    elif st.get("error"):
+                        self.lbl_rank.config(text=f"排名 {nick} · 同步失败", fg="#f6d9ae")
+                    else:
+                        self.lbl_rank.config(text=f"排名 {nick} · 同步中", fg="#f6d9ae")
+                else:
+                    self.lbl_rank.config(text="排名 · 未登录", fg="#fff3dc")
+        except Exception:
+            pass
+        try:
+            if self.nb.index("current") == 0:
+                self._draw_chart()
+                self._draw_token_bar()
+                self._refresh_daily_list()
+                self.week_card_value.config(
+                    text=f"费用 {fmt_money(storage.this_week_stats()['cost'])}")
+                self.month_card_value.config(
+                    text=f"费用 {fmt_money(storage.this_month_stats()['cost'])}")
+        except Exception:
+            pass
+
+        self.root.after(1500, self._tick)
 
     def _on_tab_changed(self, event=None):
         """切换页签时刷新该页数据；并防止个别 Windows/主题下切页导致窗口意外收缩。
