@@ -8,7 +8,6 @@
 - **仪表盘交互**：点击「最近 7 天费用」柱状图中的某根柱子，下方 Token 构成条即切换为该日的构成（标题同步显示日期）；点击柱状图空白处返回今日
 - **本地代理**：监听 `127.0.0.1:8787`，在本地转发 DeepSeek API 请求并统计
 - **Codex 对话记录**：直接读取 CC Switch 的用量数据库，Codex 对话也能自动记录
-- **YQ Harness 同步**：自动读取 YQ Harness 的会话用量投影缓存（`%APPDATA%\YQ\yq-home\storages\session_projcache.json`，支持 `YQ_HOME` 环境变量），YQ 对话自动统计
 - **DSH Harness 同步**：自动读取 DeepSeek Harness / DSH Desktop 的会话用量投影缓存（数据目录识别：`config.dsh.home` > `DSH_HOME` > `~/.dsh`；自动识别新版分片目录 `storages/session_projcache/sessions/*.json` 与旧版单文件 `session_projcache.json`），DSH 对话自动统计
 - **CodeBuddy 用量同步**：自动读取 CodeBuddy（腾讯云代码助手）日志中的 Agent 回合用量（`%APPDATA%\CodeBuddy CN\logs\`），CodeBuddy 对话自动统计，无需改任何地址
 - **WorkBuddy 用量同步**：自动读取 WorkBuddy CLI 会话文件中的调用用量（`~/.workbuddy/projects/*/*.jsonl`），WorkBuddy 对话自动统计
@@ -37,31 +36,27 @@
 2. 软件会只读 CC Switch 的本地数据库 `~/.cc-switch/cc-switch.db`，每 2 秒自动同步
 3. Codex 里的对话用量会自动进入统计，不经过任何转发，不影响响应速度
 
-**方式二：YQ Harness（自动，无需任何配置）**
 
-1. 启动软件即可，YQ Harness 会把会话用量投影写到 `%APPDATA%\YQ\yq-home\storages\session_projcache.json`（桌面端通过 `YQ_HOME` 环境变量指定数据目录，软件自动识别）
-2. 软件每 5 秒只读同步，按会话差分导入 token 用量并计费
-3. 模型归属：手动映射 > 本地 API 解析 > YQ `settings.yaml` 默认模型（`agent-default-model`），解析不到时按 `unknown_model_fallback` 计费
 
-**方式三：CodeBuddy（自动，无需任何配置）**
+**方式二：CodeBuddy（自动，无需任何配置）**
 
 1. 启动软件即可，CodeBuddy 每次 Agent 回合结束会把用量写入 `%APPDATA%\CodeBuddy CN\logs\` 下的扩展日志
 2. 软件每 10 秒只读同步，把每次回合的输入/输出 token 导入并计费
 3. 模型名从日志自动识别（如 DeepSeek-V4 Pro / Deepseek-V4-Flash），识别不到时按 `unknown_model_fallback` 计费；也可在 `codebuddy.model` 中手动指定
 
-**方式四：WorkBuddy（自动，无需任何配置）**
+**方式三：WorkBuddy（自动，无需任何配置）**
 
 1. 启动软件即可，WorkBuddy CLI 会把每次模型调用写入 `~/.workbuddy/projects/<项目目录>/<会话ID>.jsonl`
 2. 软件每 10 秒只读同步，把每次调用的 token 用量导入并计费
 3. 模型名取自调用记录的 `providerData.model`
 
-**方式五：DSH Harness / DSH Desktop（自动，无需任何配置）**
+**方式四：DSH Harness / DSH Desktop（自动，无需任何配置）**
 
 1. 启动软件即可，DSH Desktop 会把各会话用量投影写到 `~/.dsh/storages/session_projcache/`（新版分片目录；老版本为单文件 `session_projcache.json`，自动兼容）
 2. 软件每 5 秒只读同步，按会话差分导入 token 用量并计费（已导入过的会话只补增量，重启不重复计费）
 3. 模型归属：手动映射 > 本地 API 解析 > `~/.dsh/settings.yaml` 默认模型（`agent-default-model`），解析不到时按 `unknown_model_fallback` 计费
 
-**方式六：其他客户端走本地代理（可选）**
+**方式五：其他客户端走本地代理（可选）**
 
 1. 将客户端 DeepSeek 的 `base_url` 从 `https://api.deepseek.com` 改为 `http://127.0.0.1:8787`
 2. 流式请求需开启 `"stream_options": {"include_usage": true}` 才能返回精确的 token 用量
@@ -75,13 +70,11 @@
 - `proxy_port`：本地代理监听端口
 - `models`：各模型输入/输出 token 单价与计费规则
 - `cc_switch`：CC Switch 同步设置（默认开启，读取 `~/.cc-switch/cc-switch.db`）
-- `yq`：YQ Harness 同步设置（默认开启，读取 `%APPDATA%\YQ\yq-home\storages\session_projcache.json`，可用 `projcache_path` 覆盖默认路径；优先识别 `YQ_HOME` 环境变量）
-  - `api_base`：YQ 本地地址（默认 `http://127.0.0.1:3080`，与 Harness 默认端口一致；YQ 桌面端端口随机时可不填，自动退回 settings.yaml 默认模型）
   - `model_refresh_seconds`：模型缓存刷新间隔（默认 300 秒）
   - `models`：可选手动指定 `{会话ID: 模型名}`，优先级高于自动解析
 - `dsh`：DSH Harness 同步设置（默认开启；数据目录定位 `home` 留空时按 `DSH_HOME` > `~/.dsh`，`projcache_path` 留空时自动探测新版分片目录或旧版单文件）
   - `home`：可选手动指定 DSH 数据目录（默认 `~/.dsh`）
-  - `api_base` / `model_refresh_seconds` / `models`：同 `yq` 段
+  - `api_base` / `model_refresh_seconds` / `models`：DSH 本地 API 地址与模型解析缓存设置
 - `codebuddy`：CodeBuddy 用量同步设置（默认开启，读取 `%APPDATA%\CodeBuddy CN\logs\`，可用 `logs_dir` 覆盖日志目录）
   - `sync_interval_seconds`：同步间隔（默认 10 秒）
   - `model`：可选手动指定模型名（如 `deepseek-v4-pro`），不填则从日志自动识别
@@ -90,7 +83,7 @@
 - `update_check`：自动更新检测设置（默认开启）
   - `enabled`：是否启用自动更新检测
   - `interval_hours`：检查间隔小时数（默认 6）
-- 六个数据源（本地代理 / CC Switch / YQ Harness / DSH Harness / CodeBuddy / WorkBuddy）可在设置页「数据源开关」中分别开关，修改即时生效
+- 五个数据源（本地代理 / CC Switch / DSH Harness / CodeBuddy / WorkBuddy）可在设置页「数据源开关」中分别开关，修改即时生效
 
 ## 源码运行 / 打包
 

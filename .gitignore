@@ -22,3 +22,10 @@ cloud_rank_deploy.zip
 # 部署工具（含服务器凭据，勿提交）
 deploy_tools.py
 work/
+
+# server_rank 部署资源（体积巨大，不入库）
+server_rank/tools/
+server_rank/*.msi
+server_rank/**/*.msi
+server_rank/**/*.zip
+server_rank/**/*.exe

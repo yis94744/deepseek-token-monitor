@@ -33,10 +33,9 @@ import scheduler
 import storage
 import updater
 import workbuddy_sync
-import yq_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.25"
+APP_VERSION = "1.13.26"
 
 
 # ================= 路径与资源 =================
@@ -102,11 +101,6 @@ DEFAULT_CONFIG = {
         "db_path": "",
         "app_types": ["codex"],
         "sync_interval_seconds": 2,
-    },
-    "yq": {
-        "enabled": True,
-        "projcache_path": "",
-        "sync_interval_seconds": 5,
     },
     "dsh": {
         "enabled": True,
@@ -315,6 +309,78 @@ DEFAULT_CONFIG = {
                 "cache_miss": 3.0,
                 "output": 6.0
             }
+        },
+        # glm-5.3-flash
+        "glm-5.3-flash": {
+            "note": "智谱 GLM-5.3-Flash（原生多模态）；官方美元价 命中$0.03/未命中$0.05/输出$0.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 0.2032,
+            "cache_miss": 0.3387,
+            "output": 1.3549,
+            "usd_price": {"cache_hit": 0.03, "cache_miss": 0.05, "output": 0.2},
+            "fx_rate": 6.7743,
+        },
+        # glm-5.3
+        "glm-5.3": {
+            "note": "智谱 GLM-5.3（旗舰）；官方美元价 命中$0.26/未命中$0.7/输出$2.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 1.7613,
+            "cache_miss": 4.742,
+            "output": 14.9035,
+            "usd_price": {"cache_hit": 0.26, "cache_miss": 0.7, "output": 2.2},
+            "fx_rate": 6.7743,
+        },
+        # glm-5.2
+        "glm-5.2": {
+            "note": "智谱 GLM-5.2；官方美元价 命中$0.26/未命中$0.7/输出$2.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 1.7613,
+            "cache_miss": 4.742,
+            "output": 14.9035,
+            "usd_price": {"cache_hit": 0.26, "cache_miss": 0.7, "output": 2.2},
+            "fx_rate": 6.7743,
+        },
+        # gpt-5.6-luna
+        "gpt-5.6-luna": {
+            "note": "OpenAI GPT-5.6 Luna；官方美元价 命中$0.02/未命中$0.2/输出$1.2 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 0.1355,
+            "cache_miss": 1.3549,
+            "output": 8.1292,
+            "usd_price": {"cache_hit": 0.02, "cache_miss": 0.2, "output": 1.2},
+            "fx_rate": 6.7743,
+        },
+        # gpt-5.6-terra
+        "gpt-5.6-terra": {
+            "note": "OpenAI GPT-5.6 Terra；官方美元价 命中$0.2/未命中$2.0/输出$12.0 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 1.3549,
+            "cache_miss": 13.5486,
+            "output": 81.2916,
+            "usd_price": {"cache_hit": 0.2, "cache_miss": 2.0, "output": 12.0},
+            "fx_rate": 6.7743,
+        },
+        # gpt-5.5
+        "gpt-5.5": {
+            "note": "OpenAI GPT-5.5；官方美元价 命中$0.5/未命中$5.0/输出$30.0 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 3.3872,
+            "cache_miss": 33.8715,
+            "output": 203.229,
+            "usd_price": {"cache_hit": 0.5, "cache_miss": 5.0, "output": 30.0},
+            "fx_rate": 6.7743,
+        },
+        # gpt-5.4-mini
+        "gpt-5.4-mini": {
+            "note": "OpenAI GPT-5.4 Mini；官方美元价 命中$0.08/未命中$0.75/输出$4.5 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 0.5419,
+            "cache_miss": 5.0807,
+            "output": 30.4843,
+            "usd_price": {"cache_hit": 0.08, "cache_miss": 0.75, "output": 4.5},
+            "fx_rate": 6.7743,
+        },
+        # codex-auto-review
+        "codex-auto-review": {
+            "note": "Codex 自动代码审查（按 GPT-5.5 同级计价）；官方美元价 命中$0.25/未命中$5.0/输出$30.0 每百万tokens，按 2026-09-11 中间价 6.7743 折算为人民币；无峰谷价（官方未区分时段）",
+            "cache_hit": 1.6936,
+            "cache_miss": 33.8715,
+            "output": 203.229,
+            "usd_price": {"cache_hit": 0.25, "cache_miss": 5.0, "output": 30.0},
+            "fx_rate": 6.7743,
         },
     },
 }
@@ -573,10 +639,6 @@ class App:
         threading.Thread(target=cc_switch_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
                          daemon=True).start()
-        # YQ Harness 数据同步线程：只读 YQ 会话用量投影缓存
-        threading.Thread(target=yq_sync.run,
-                         args=(self.config, self.settings, self.state, self.stop_event),
-                         daemon=True).start()
         # DSH Harness 数据同步线程：只读 DSH/DSH Desktop 会话用量投影缓存（分片目录或旧单文件）
         threading.Thread(target=dsh_sync.run,
                          args=(self.config, self.settings, self.state, self.stop_event),
@@ -656,11 +718,6 @@ class App:
     def _toggle_cc(self):
         """设置页：开关 CC Switch 同步（同步线程常驻，读到配置变化后自动生效）。"""
         self.config.setdefault("cc_switch", {})["enabled"] = self.cc_var.get()
-        self._save_config()
-
-    def _toggle_yq(self):
-        """设置页：开关 YQ Harness 同步（同步线程常驻，读到配置变化后自动生效）。"""
-        self.config.setdefault("yq", {})["enabled"] = self.yq_var.get()
         self._save_config()
 
     def _toggle_dsh(self):
@@ -1983,10 +2040,6 @@ class App:
             value=bool((self.config.get("cc_switch") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="CC Switch 同步", variable=self.cc_var,
                         command=self._toggle_cc).pack(anchor="w", pady=(0, 4))
-        self.yq_var = tk.BooleanVar(
-            value=bool((self.config.get("yq") or {}).get("enabled", True)))
-        ttk.Checkbutton(left, text="YQ Harness 同步", variable=self.yq_var,
-                        command=self._toggle_yq).pack(anchor="w", pady=(0, 4))
         self.dsh_var = tk.BooleanVar(
             value=bool((self.config.get("dsh") or {}).get("enabled", True)))
         ttk.Checkbutton(left, text="DSH Harness 同步", variable=self.dsh_var,
@@ -2006,9 +2059,6 @@ class App:
         # CC Switch 数据同步状态
         self.lbl_ccsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
         self.lbl_ccsync.pack(anchor="w", pady=(0, 6))
-        # YQ Harness 数据同步状态
-        self.lbl_yqsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_yqsync.pack(anchor="w", pady=(0, 6))
         # DSH Harness 数据同步状态
         self.lbl_dshsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
         self.lbl_dshsync.pack(anchor="w", pady=(0, 6))
@@ -2971,94 +3021,6 @@ class App:
                     text=f"CC Switch 同步：运行中 · 累计导入 {fmt_int(cc.get('total_added', 0))} 条"
                          f" · {cc.get('last_time', '')}", fg=C_GREEN)
 
-
-        # 4.7) YQ Harness 数据同步状态
-        if hasattr(self, "lbl_yqsync"):
-            yq = self.state.get("yq_sync")
-            if not yq or not yq.get("enabled"):
-                self.lbl_yqsync.config(text="YQ Harness 同步：未启用", fg=C_SUB)
-            elif yq.get("error"):
-                self.lbl_yqsync.config(
-                    text="YQ Harness 同步：读取失败 " + str(yq["error"]), fg=C_RED)
-            else:
-                self.lbl_yqsync.config(
-                    text=f"YQ Harness 同步：运行中 · 累计导入 {fmt_int(yq.get('total_added', 0))} 条"
-                         f" · {yq.get('last_time', '')}", fg=C_GREEN)
-
-        # 4.75) DSH Harness 数据同步状态
-        if hasattr(self, "lbl_dshsync"):
-            dsh = self.state.get("dsh_sync")
-            if not dsh or not dsh.get("enabled"):
-                self.lbl_dshsync.config(text="DSH Harness 同步：未启用", fg=C_SUB)
-            elif dsh.get("error"):
-                self.lbl_dshsync.config(
-                    text="DSH Harness 同步：读取失败 " + str(dsh["error"]), fg=C_RED)
-            else:
-                self.lbl_dshsync.config(
-                    text=f"DSH Harness 同步：运行中 · 累计导入 {fmt_int(dsh.get('total_added', 0))} 条"
-                         f" · {dsh.get('last_time', '')}", fg=C_GREEN)
-
-        # 4.8) CodeBuddy 数据同步状态
-        if hasattr(self, "lbl_codebuddysync"):
-            cb = self.state.get("codebuddy_sync")
-            if not cb or not cb.get("enabled"):
-                self.lbl_codebuddysync.config(text="CodeBuddy 同步：未启用", fg=C_SUB)
-            elif cb.get("error"):
-                self.lbl_codebuddysync.config(
-                    text="CodeBuddy 同步：读取失败 " + str(cb["error"]), fg=C_RED)
-            else:
-                self.lbl_codebuddysync.config(
-                    text=f"CodeBuddy 同步：运行中 · 累计导入 {fmt_int(cb.get('total_added', 0))} 条"
-                         f" · {cb.get('last_time', '')}", fg=C_GREEN)
-
-        # 4.9) WorkBuddy 数据同步状态
-        if hasattr(self, "lbl_workbuddysync"):
-            wb = self.state.get("workbuddy_sync")
-            if not wb or not wb.get("enabled"):
-                self.lbl_workbuddysync.config(text="WorkBuddy 同步：未启用", fg=C_SUB)
-            elif wb.get("error"):
-                self.lbl_workbuddysync.config(
-                    text="WorkBuddy 同步：读取失败 " + str(wb["error"]), fg=C_RED)
-            else:
-                self.lbl_workbuddysync.config(
-                    text=f"WorkBuddy 同步：运行中 · 累计导入 {fmt_int(wb.get('total_added', 0))} 条"
-                         f" · {wb.get('last_time', '')}", fg=C_GREEN)
-
-        # 5) 日期与仪表盘图表
-        self.lbl_date.config(text=datetime.now().strftime("%Y年%m月%d日"))
-        # 5.1) 排名状态按钮：随登录态与名次刷新
-        try:
-            if hasattr(self, "lbl_rank"):
-                import rank_client as _rc
-                sess = _rc.load_session()
-                st = _rc.get_state()
-                if sess.get("token"):
-                    me = sess.get("user") or {}
-                    nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
-                    rank = st.get("my_rank") if st else None
-                    if rank:
-                        self.lbl_rank.config(text=f"排名 {nick} · 第{rank}名", fg=C_GOLD)
-                    elif st.get("error"):
-                        self.lbl_rank.config(text=f"排名 {nick} · 同步失败", fg="#f6d9ae")
-                    else:
-                        self.lbl_rank.config(text=f"排名 {nick} · 同步中", fg="#f6d9ae")
-                else:
-                    self.lbl_rank.config(text="排名 · 未登录", fg="#fff3dc")
-        except Exception:
-            pass
-        try:
-            if self.nb.index("current") == 0:
-                self._draw_chart()
-                self._draw_token_bar()
-                self._refresh_daily_list()
-                self.week_card_value.config(
-                    text=f"费用 {fmt_money(storage.this_week_stats()['cost'])}")
-                self.month_card_value.config(
-                    text=f"费用 {fmt_money(storage.this_month_stats()['cost'])}")
-        except Exception:
-            pass
-
-        self.root.after(1500, self._tick)
 
     def _on_tab_changed(self, event=None):
         """切换页签时刷新该页数据；并防止个别 Windows/主题下切页导致窗口意外收缩。

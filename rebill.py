@@ -6,8 +6,7 @@
 默认库路径为 %APPDATA%\\DeepSeekTokenMonitor\\data\\usage.db。
 
 步骤：
-1. yq 会话按解析出的真实模型重归属（沿用 yq_sync 的模型解析）；
-2. 所有行（yq / cc / 代理）按 model + created_at 重新取价并重算 cost，
+1. 所有行（cc / 代理 / 各同步源）按 model + created_at 重新取价并重算 cost，
    取价完全委托 pricing.get_price（含多段价 tiers 与峰谷判定）：
    - 命中多段价 tiers → 该段价（2026-09-10 12:00 起 Flash 系列新价）；
    - 2026-08-17 之前 → legacy 平峰价；
@@ -23,7 +22,6 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pricing
-import yq_sync
 
 APPDATA = (os.environ.get('APPDATA')
            or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'))
@@ -41,22 +39,9 @@ if _retire_at is not None and _retire_model:
 con = sqlite3.connect(DB)
 cur = con.cursor()
 
-# ---- 1) yq 会话模型重归属 ----
-for prefix, syncer in (("yq", yq_sync),):
-    sids = [r[0] for r in cur.execute(
-        "SELECT DISTINCT substr(source_key, 5, instr(substr(source_key, 5), ':') - 1) "
-        "FROM requests WHERE source_key LIKE '%s:%%'" % prefix).fetchall()]
-    models = syncer._resolve_session_models(config, {}, sids)
-    print("\n%s 模型解析:" % prefix, json.dumps(models, ensure_ascii=False))
-    for sid in sids:
-        model = models.get(sid)
-        if not model:
-            continue
-        cur.execute("UPDATE requests SET model=? WHERE source_key LIKE ? AND model != ?",
-                    (model, prefix + ":" + sid + ":%", model))
-con.commit()
+# ---- 1) （原 yq 模型重归属已移除：YQ Harness 已停止支持）----
 
-# ---- 2) 全库重算费用 ----
+# ---- 1) 全库重算费用 ----
 cur.execute("SELECT COUNT(*) FROM requests")
 total = cur.fetchone()[0]
 print("\n重算 %d 行费用..." % total)
@@ -87,7 +72,7 @@ con.commit()
 print("费用合计: %.6f -> %.6f 元 (差额 %+.6f)" % (old_total, new_total, new_total - old_total))
 print("改写行数: %d, 时间解析失败(未改): %d" % (fixed, bad))
 
-# ---- 3) 按来源/模型汇总 ----
+# ---- 2) 按来源/模型汇总 ----
 print("\n按来源汇总:")
 for r in cur.execute(
     "SELECT CASE WHEN source_key LIKE 'yq:%' THEN 'yq' "
