@@ -35,7 +35,7 @@ import updater
 import workbuddy_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.26"
+APP_VERSION = "1.13.27"
 
 
 # ================= 路径与资源 =================
@@ -2127,14 +2127,12 @@ class App:
             except Exception:
                 return ""
 
-        # pack 顺序即上下顺序：标题 → 档位说明 → 表格 → 吉祥物
+        # pack 顺序即上下顺序：标题 → 档位说明 → 表格
         lbl_band = tk.Label(right, text="空闲 / 高峰" + _band_label(), bg=C_BG, fg=C_SUB,
                             font=(FONT, 8))
         lbl_band.pack(anchor="w", pady=(0, 2))
         tree.pack(fill="both", expand=True)
         self._price_tree = tree
-        mascot = self._keep_image(_res("deco1.gif"), subsample=7)
-        tk.Label(right, image=mascot, bg=C_BG).pack(side="bottom", pady=(8, 0))
 
         def refresh():
             for item in tree.get_children():
