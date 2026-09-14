@@ -310,8 +310,64 @@ def make_client():
 
 
 def get_state():
-    """最近一次榜单/我的名次（内存态，供 UI 读取）。未同步时为 None。"""
+    """最近一次榜单/我的名次（供 UI 读取）。
+
+    内存态为空时会回落到磁盘缓存（rank_cache.json）——这样**程序刚启动、
+    首轮上报还没跑完时，界面直接显示上次的名次**，而不是干巴巴的"同步中"
+    （用户会以为坏了）。首轮上报成功后立即用新数据覆盖。
+    """
+    # 仅当"从未同步过"时才回落到缓存。
+    # 一旦本轮产生了结果（成功或失败）就以内存态为准——否则会把
+    # "同步失败"这种需要用户知道的状态，掩盖成上次的名次。
+    if _state.get("my_rank") is None and _state.get("board") is None \
+            and not _state.get("error") and not _state.get("last_time"):
+        cached = _load_cache()
+        if cached:
+            return cached
     return _state
+
+
+def _cache_path() -> str:
+    """缓存文件路径：与 ranking.json 同目录（跟随 _APP_DIR，便于测试隔离）。"""
+    return os.path.join(os.path.dirname(_RANK_PATH), "rank_cache.json")
+
+
+def _save_cache():
+    """把最近一次成功的结果落到磁盘（仅排名相关，不含敏感信息）。"""
+    try:
+        data = {
+            "board": _state.get("board"),
+            "day": _state.get("day"),
+            "my_rank": _state.get("my_rank"),
+            "my_tokens": _state.get("my_tokens"),
+            "last_time": _state.get("last_time"),
+            "board_version": _state.get("board_version"),
+            "error": None,
+            "error_streak": 0,
+            "token_invalid": False,
+            "from_cache": False,
+        }
+        tmp = _cache_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, _cache_path())
+    except Exception:
+        pass
+
+
+def _load_cache():
+    """读取磁盘缓存；带上 from_cache 标记，UI 可据此提示"上次同步"。"""
+    try:
+        with open(_cache_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return None
+        if data.get("my_rank") is None and not data.get("board"):
+            return None
+        data["from_cache"] = True
+        return data
+    except Exception:
+        return None
 
 
 _state = {"board": None, "day": None, "my_rank": None, "my_tokens": None,
@@ -391,6 +447,7 @@ def _sync_once(c):
     _state["error"] = None
     _state["error_streak"] = 0
     _state["token_invalid"] = False
+    _save_cache()   # 落盘：下次启动立即有数据可显示
     return True
 
 
@@ -404,8 +461,10 @@ def start_reporter(interval_seconds=_REPORT_INTERVAL):
     start_reporter._started = True
 
     def loop():
-        # 启动后先等一会，让主程序完成初始化再首报
-        time.sleep(5)
+        # 启动后稍等让主程序完成初始化再首报。
+        # 从 5 秒缩短到 2 秒：界面在首报完成前会显示磁盘缓存的名次，
+        # 但缓存首次为空（新用户）时仍会短暂显示"同步中"，越短越好。
+        time.sleep(2)
         while True:
             try:
                 sess = load_session()

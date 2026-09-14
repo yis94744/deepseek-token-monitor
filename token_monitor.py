@@ -3182,7 +3182,10 @@ class App:
                     nick = me.get("nickname") or (me.get("email") or "").split("@")[0]
                     rank = st.get("my_rank") if st else None
                     if rank:
-                        self.lbl_rank.config(text=f"排名 {nick} · 第{rank}名", fg=C_GOLD)
+                        # 数据来自磁盘缓存时标注"上次"，避免误认为此刻已同步
+                        suffix = "（上次同步）" if st.get("from_cache") else ""
+                        self.lbl_rank.config(
+                            text=f"排名 {nick} · 第{rank}名{suffix}", fg=C_GOLD)
                     elif st.get("error"):
                         self.lbl_rank.config(text=f"排名 {nick} · 同步失败", fg="#f6d9ae")
                     else:
