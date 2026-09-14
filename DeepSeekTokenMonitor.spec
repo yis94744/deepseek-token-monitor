@@ -16,7 +16,10 @@ a = Analysis(
         ('C:/Windows/System32/msvcp140.dll', '.'),
     ],
     datas=[('assets', 'assets')],
-    hiddenimports=['rank_client', 'rank_ui', 'logutil', 'health', 'guard'],
+    # 运行时动态 import 的模块必须显式声明，否则打包后会 ModuleNotFoundError：
+    # rank_client/rank_ui（排行榜）、logutil（日志轮转）、health（健康自检）、
+    # guard（单实例+崩溃兜底）、trust_ca（一键信任服务器证书）
+    hiddenimports=['rank_client', 'rank_ui', 'logutil', 'health', 'guard', 'trust_ca'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
