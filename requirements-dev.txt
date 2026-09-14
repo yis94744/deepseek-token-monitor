@@ -1,0 +1,6 @@
+# 开发/测试依赖（不在打包产物中）
+-r requirements.txt
+
+# 测试：本项目使用纯标准库 + 自制断言（无需 pytest），
+# 但 pytest 可以直接发现 test_*.py 并逐个运行：
+pytest>=7.0.0

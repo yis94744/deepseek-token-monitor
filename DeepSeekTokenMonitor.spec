@@ -16,7 +16,7 @@ a = Analysis(
         ('C:/Windows/System32/msvcp140.dll', '.'),
     ],
     datas=[('assets', 'assets')],
-    hiddenimports=['rank_client', 'rank_ui'],
+    hiddenimports=['rank_client', 'rank_ui', 'logutil', 'health', 'guard'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

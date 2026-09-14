@@ -35,7 +35,7 @@ import updater
 import workbuddy_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.13.28"
+APP_VERSION = "1.14.0"
 
 
 # ================= 路径与资源 =================
@@ -610,6 +610,15 @@ class App:
         self.settings = load_settings()
         storage.init_db(DATA_DIR)
         storage.rebuild_balance_history()  # 按当前口径重算历史余额扣款/充值（幂等，升级后对齐余额走势）
+        # 清理已下线模块遗留的孤儿日志（Kun/YQ 数据源移除后残留的 kun_sync.log 等）
+        try:
+            import logutil
+            removed = logutil.cleanup_orphan_logs(DATA_DIR)
+            if removed:
+                import guard
+                guard.note("清理孤儿日志 %d 个" % removed)
+        except Exception:
+            pass
         self._last_request_id = storage.max_request_id()  # 悬浮窗 +N 动效的新增记录游标
         self._popups = 0                                  # 弹窗错位计数
 
@@ -970,6 +979,11 @@ class App:
         self.lbl_proxy_status = tk.Label(status, text="代理 启动中...", bg=C_BROWN,
                                          fg=C_GOLD, font=(FONT, 9))
         self.lbl_proxy_status.pack(side="left", padx=14, pady=4)
+        # 整体健康摘要：任一通道异常时这里变红/黄并写明原因（点击看详情）
+        self.lbl_health = tk.Label(status, text="健康检查中...", bg=C_BROWN,
+                                   fg="#9fe8a8", font=(FONT, 9), cursor="hand2")
+        self.lbl_health.pack(side="left", padx=(0, 14))
+        self.lbl_health.bind("<Button-1>", lambda e: self._show_health_dialog())
         # 更新检查状态（常驻可见：已是最新 / 发现新版本可点击 / 检查失败）
         self.lbl_update_status = tk.Label(status, text="更新检查中...", bg=C_BROWN,
                                           fg="#f6d9ae", font=(FONT, 9), cursor="hand2")
@@ -2067,7 +2081,24 @@ class App:
         self.lbl_codebuddysync.pack(anchor="w", pady=(0, 6))
         # WorkBuddy 数据同步状态
         self.lbl_workbuddysync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_workbuddysync.pack(anchor="w", pady=(0, 12))
+        self.lbl_workbuddysync.pack(anchor="w", pady=(0, 6))
+
+        # 排名服务器地址（可改：服务器迁移时用户自己就能切，不必等新版）
+        rank_box = tk.Frame(left, bg=C_BG)
+        rank_box.pack(anchor="w", fill="x", pady=(0, 12))
+        tk.Label(rank_box, text="排名服务器", bg=C_BG, fg=C_TEXT,
+                 font=(FONT, 10)).pack(anchor="w")
+        row_box = tk.Frame(rank_box, bg=C_BG)
+        row_box.pack(anchor="w", fill="x", pady=(2, 0))
+        import rank_client as _rc
+        self.rank_server_var = tk.StringVar(value=_rc.resolve_server())
+        ttk.Entry(row_box, textvariable=self.rank_server_var,
+                  width=32).pack(side="left")
+        ttk.Button(row_box, text="保存并重连",
+                   command=self._apply_rank_server).pack(side="left", padx=6)
+        self.lbl_rank_server_state = tk.Label(rank_box, text="", bg=C_BG, fg=C_SUB,
+                                              font=(FONT, 8))
+        self.lbl_rank_server_state.pack(anchor="w")
 
         # 操作按钮
         ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
@@ -2165,6 +2196,38 @@ class App:
 
         refresh()
         return refresh
+
+    def _apply_rank_server(self):
+        """设置页：保存排名服务器地址并立即重连验证（失败给出人话原因）。"""
+        import rank_client as rc
+        url = rc.set_server(self.rank_server_var.get())
+        self.rank_server_var.set(url)
+        self.lbl_rank_server_state.config(text="已保存，正在重连…", fg=C_GOLD)
+
+        def work():
+            try:
+                c = rc.make_client()
+                if not c.token:
+                    self.root.after(0, lambda: self.lbl_rank_server_state.config(
+                        text="已保存（未登录，登录后将使用新地址）", fg=C_SUB))
+                    return
+                rc._sync_once(c)
+                st = rc.get_state() or {}
+                if st.get("error"):
+                    msg = str(st["error"])[:44]
+                    self.root.after(0, lambda: self.lbl_rank_server_state.config(
+                        text="连接失败：" + msg, fg=C_RED))
+                else:
+                    self.root.after(0, lambda: self.lbl_rank_server_state.config(
+                        text="连接正常（服务器日期 %s）" % (st.get("day") or "?"),
+                        fg=C_GREEN))
+            except Exception as exc:
+                msg = str(exc)[:44]
+                self.root.after(0, lambda: self.lbl_rank_server_state.config(
+                    text="连接失败：" + msg, fg=C_RED))
+
+        import threading
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------- API Key 管理 ----------
     def _apply_api_key(self, key: str) -> bool:
@@ -2603,6 +2666,11 @@ class App:
             menu.grab_release()
 
     def _open_rank(self):
+        try:
+            import guard
+            guard.note("打开排名页")
+        except Exception:
+            pass
         """打开"排名"登录/排名对话框（设置页按钮 / 悬浮球 / 桌宠右键）。"""
         try:
             import rank_ui
@@ -2995,6 +3063,9 @@ class App:
             except Exception:
                 pass
 
+        # 2.9) 整体健康摘要（把"静默失败"变成看得见的红字）
+        self._refresh_health_label()
+
         # 3) 代理状态
         if not self.config.get("proxy_enabled", True):
             self.lbl_proxy_status.config(text="代理 已关闭（设置页可重新开启）", fg=C_SUB)
@@ -3145,6 +3216,88 @@ class App:
                 self.root.after(150, lambda: guard(seq))
         except Exception:
             pass
+
+    # ---------- 健康自检 ----------
+    def _health_snapshot(self):
+        """汇总所有通道健康状态（供状态栏与详情弹窗共用）。"""
+        import health
+        import rank_client as _rc
+        state = dict(self.state)
+        state["proxy_enabled"] = bool(self.config.get("proxy_enabled", True))
+        state["update_enabled"] = bool(
+            (self.config.get("update_check") or {}).get("enabled", True))
+        rs = _rc.get_state() or {}
+        sess = _rc.load_session()
+        rank_state = dict(rs)
+        rank_state["token"] = sess.get("token")
+        return health.snapshot(state, rank_state)
+
+    def _refresh_health_label(self):
+        """底部状态栏：整体健康一句话摘要，异常时写明是哪个通道坏了。"""
+        try:
+            import health
+            snap = self._health_snapshot()
+            level = health.overall(snap)
+            probs = health.problems(snap)
+            if level == "error":
+                first = probs[0][1]
+                self.lbl_health.config(
+                    text="⚠ 异常：%s" % first["detail"][:46], fg="#ff9a95")
+            elif level == "warn":
+                first = probs[0][1]
+                self.lbl_health.config(
+                    text="⚠ %s" % first["detail"][:50], fg="#ffd28a")
+            elif level == "off":
+                self.lbl_health.config(text="健康检查：全部关闭", fg="#f6d9ae")
+            else:
+                self.lbl_health.config(text="✓ 各通道正常", fg="#9fe8a8")
+        except Exception:
+            pass
+
+    def _show_health_dialog(self):
+        """点击健康摘要：弹出逐通道明细，一眼看出到底哪一块坏了。"""
+        try:
+            import health
+            snap = self._health_snapshot()
+        except Exception as exc:
+            messagebox.showerror("健康检查", "读取失败：%s" % exc, parent=self.root)
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("运行状态自检")
+        dlg.configure(bg=C_BG)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        names = {
+            "proxy": "本地代理", "balance": "余额接口", "cc_sync": "CC Switch 同步",
+            "dsh_sync": "DSH Harness 同步", "codebuddy_sync": "CodeBuddy 同步",
+            "workbuddy_sync": "WorkBuddy 同步", "rank": "排名上报", "update": "更新检查",
+        }
+        tk.Label(dlg, text="运行状态自检", bg=C_BG, fg=C_BROWN_DARK,
+                 font=(FONT, 11, "bold")).pack(anchor="w", padx=18, pady=(14, 2))
+        tk.Label(dlg, text="最后成功时间距今越久越可疑；红色表示需要处理。",
+                 bg=C_BG, fg=C_SUB, font=(FONT, 8)).pack(anchor="w", padx=18, pady=(0, 8))
+
+        body = tk.Frame(dlg, bg=C_BG)
+        body.pack(fill="both", expand=True, padx=18)
+        marks = {"ok": "✓", "warn": "!", "error": "✗", "off": "–", "unknown": "?"}
+        for key, name in names.items():
+            info = snap.get(key)
+            if not info:
+                continue
+            row = tk.Frame(body, bg=C_BG)
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=marks.get(info["level"], "?"), bg=C_BG,
+                     fg=info["color"], font=(FONT, 10, "bold"), width=2).pack(side="left")
+            tk.Label(row, text=name, bg=C_BG, fg=C_TEXT, font=(FONT, 9),
+                     width=20, anchor="w").pack(side="left")
+            tk.Label(row, text=info["detail"], bg=C_BG, fg=info["color"],
+                     font=(FONT, 9), anchor="w", justify="left",
+                     wraplength=340).pack(side="left", fill="x", expand=True)
+
+        ttk.Button(dlg, text="关闭", command=dlg.destroy).pack(pady=12)
+        dlg.grab_set()
 
     def _refresh_balance_now(self):
         def work():
@@ -3471,6 +3624,11 @@ class App:
 
     def _check_update_now(self):
         """设置页按钮：立即检查更新。"""
+        try:
+            import guard
+            guard.note("手动检查更新")
+        except Exception:
+            pass
         self.state["update"] = {"checked_at": "检查中..."}
         threading.Thread(target=self._run_update_check, daemon=True).start()
 
@@ -3503,6 +3661,11 @@ class App:
 
     def _rebill_all(self):
         """设置页按钮：按当前峰谷价重算全部历史费用（对账用）。"""
+        try:
+            import guard
+            guard.note("重算历史费用")
+        except Exception:
+            pass
         if not messagebox.askyesno(
                 "重算历史费用",
                 "将按 config.json 当前价目与峰谷规则（工作日高峰 9:00-12:00 与 "
@@ -3605,6 +3768,15 @@ def _installed_exe_path() -> str:
 
 
 def main():
+    # 单实例互斥：已经有一个实例在跑时，把它的窗口拉到最前并退出，
+    # 避免两个进程抢 8787 端口导致其中一个静默"代理启动失败"。
+    import guard
+    if not guard.acquire_single_instance():
+        guard.activate_existing_window()
+        return
+    # 全局异常兜底：未捕获异常一律写 data/crash.log（含版本号与最近操作轨迹）
+    guard.install_exception_hooks(DATA_DIR, APP_VERSION)
+
     app = App()
     app.root.after(1000, app._tick)
     app.root.after(600, app._maybe_show_key_wizard)  # 首次无 Key 时引导填写（可跳过）

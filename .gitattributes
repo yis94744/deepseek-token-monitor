@@ -1,0 +1,20 @@
+# 统一行尾：仓库内一律存 LF，工作区按平台检出。
+# 背景：此前没有本文件，加上 core.autocrlf=true，导致同一文件在
+# 本地是 CRLF、仓库是 LF，每次比较都显示"整个文件被改写"（假差异），
+# 极易误判改动范围。这里显式固定，避免再次发生。
+* text=auto eol=lf
+
+# Windows 专用脚本保持 CRLF（cmd/PowerShell 对 LF 的兼容性不稳）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件不做行尾转换
+*.exe binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.zip binary
+*.msi binary
+*.db binary

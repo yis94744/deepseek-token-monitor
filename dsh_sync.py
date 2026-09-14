@@ -34,10 +34,9 @@ import os
 import urllib.request
 from datetime import datetime
 
+import logutil
 import pricing
 import storage
-
-_LOG = None  # 日志文件路径，由 run() 初始化
 
 # 模型解析默认参数（可用 config.json 的 dsh 段覆盖）
 _API_BASE_DEFAULT = "http://127.0.0.1:3080"
@@ -227,15 +226,21 @@ def _resolve_session_models(config: dict, settings: dict, sids: list) -> dict:
     return result
 
 
-def _log(text: str):
-    """同步过程日志（仅排查用），写入 data 目录的 dsh_sync.log。"""
-    if not _LOG:
+# 日志：统一走 logutil（5MB 轮转 + 重复内容去重），不再是每轮无条件追加
+_logger = None
+
+
+def _log(text: str, force: bool = False):
+    """同步过程日志（仅排查用），写入 data 目录的 0。
+
+    由 logutil.SyncLogger 承载：单文件超过 5MB 自动轮转（保留 1 份历史），
+    且内容与上一行相同（例如每轮的"本轮新增=0 累计=N"）时自动跳过，
+    避免此前把日志写到 74MB 的问题。
+    """
+    if _logger is None:
         return
-    try:
-        with open(_LOG, "a", encoding="utf-8") as f:
-            f.write(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " " + text + "\n")
-    except Exception:
-        pass
+    _logger.write(text, force=force)
+
 
 
 def sync_once(config: dict, settings: dict) -> int:
@@ -290,11 +295,11 @@ def sync_once(config: dict, settings: dict) -> int:
 
 def run(config: dict, settings: dict, state: dict, stop_event):
     """后台线程入口：周期增量同步 DSH Harness 会话用量。"""
-    global _LOG
+    global _logger
     dsh = config.get("dsh") or {}
     data_dir = os.path.dirname(storage._db_path or "")
     if data_dir:
-        _LOG = os.path.join(data_dir, "dsh_sync.log")
+        _logger = logutil.SyncLogger(data_dir, "dsh_sync.log")
     interval = max(2, int(dsh.get("sync_interval_seconds", 5)))
     state["dsh_sync"] = {"enabled": bool(dsh.get("enabled", True)), "total_added": 0,
                          "last_added": 0, "last_time": None, "error": None}
@@ -317,4 +322,4 @@ def run(config: dict, settings: dict, state: dict, stop_event):
             _log(f"本轮新增={added} 累计={info.get('total_added', 0)}")
         except Exception as exc:
             state["dsh_sync"]["error"] = str(exc)
-            _log("ERROR: " + str(exc))
+            _log(str(exc), force=True)

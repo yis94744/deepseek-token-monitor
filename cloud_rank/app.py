@@ -14,6 +14,7 @@ import hashlib
 import os
 import re
 import secrets
+import threading
 
 from datetime import date, datetime, timezone, timedelta
 
@@ -28,7 +29,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 DB_URL = os.environ.get(
     "CLOUDRANK_DB",
     "mysql+pymysql://root:root@127.0.0.1:3306/cloud_rank?charset=utf8")
-TOKEN_TTL_DAYS = 365  # token 有效期（登录态本地保存，足够长）
+TOKEN_TTL_DAYS = int(os.environ.get("CLOUDRANK_TOKEN_TTL_DAYS", "90"))  # token 有效期（滑动续期，见 auth_user）
 BC = os.environ.get("CLOUDRANK_BC", "Asia/Shanghai")  # 排名"天"的时区
 TZ = timezone(timedelta(hours=8))  # 服务按北京时间划分自然日
 
@@ -128,6 +129,7 @@ class LoginIn(BaseModel):
 
 class ReportIn(BaseModel):
     tokens: int = Field(ge=0, le=10**15)  # 当日累计 token（多数据源总量）
+    board_version: str = Field(default="", max_length=64)  # 客户端已有的榜单版本
 
 
 # ---------------- FastAPI ----------------
@@ -151,6 +153,15 @@ def auth_user(authorization: str = Header(default=""), db=Depends(get_db)):
         raise HTTPException(401, "登录已失效，请重新登录")
     if u.token_expires and u.token_expires < now_utc():
         raise HTTPException(401, "登录已过期，请重新登录")
+    # 滑动续期：活跃用户每 24 小时内首次调用时把有效期顺延，避免"用着用着突然过期"。
+    # 同时保证令牌不再"一次签发 365 天长期有效"——闲置超过 TTL 即失效。
+    now = now_utc()
+    if (not u.token_expires) or (u.token_expires - now).days < TOKEN_TTL_DAYS - 1:
+        u.token_expires = now + timedelta(days=TOKEN_TTL_DAYS)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     return u
 
 
@@ -159,8 +170,22 @@ def _public_user(u: User):
             "nickname": u.nickname or u.email.split("@")[0]}
 
 
+_register_at: list = []
+_register_lock = threading.Lock()
+REGISTER_MIN_INTERVAL = int(os.environ.get("CLOUDRANK_REGISTER_MIN_INTERVAL", "3"))
+
+
 @app.post("/api/register")
 def register(body: RegisterIn, db=Depends(get_db)):
+    # 防刷：全局注册频控，避免被脚本批量注册占榜。
+    now_r = now_utc()
+    with _register_lock:
+        global _register_at
+        _register_at = [t for t in _register_at if (now_r - t).total_seconds() < 60]
+        if len(_register_at) >= 10 or (
+                _register_at and (now_r - _register_at[-1]).total_seconds() < REGISTER_MIN_INTERVAL):
+            raise HTTPException(429, "注册过于频繁，请稍后再试")
+        _register_at.append(now_r)
     email = body.email.strip().lower()
     if not EMAIL_RE.match(email):
         raise HTTPException(400, "邮箱格式不正确")
@@ -189,14 +214,30 @@ def login(body: LoginIn, db=Depends(get_db)):
     return {"ok": True, "token": u.token, "user": _public_user(u)}
 
 
+REPORT_MIN_INTERVAL = int(os.environ.get("CLOUDRANK_REPORT_MIN_INTERVAL", "5"))
+_last_report_at: dict = {}
+_last_report_lock = threading.Lock()
+
+
 @app.post("/api/report")
 def report(body: ReportIn, user: User = Depends(auth_user), db=Depends(get_db)):
-    """上报当日累计 token；返回 {ok, my_today, board} 即一次"广播"。
+    """上报当日累计 token；返回 {ok, day, board}。
 
     board: 当日全平台榜单 [{rank, email, nickname, tokens}]（最多 200 名）。
+
+    限流：同一用户两次上报间隔不小于 REPORT_MIN_INTERVAL 秒，超频直接返回
+    上一次的结果（幂等）。客户端正常 30s 一次，远低于阈值，不受影响。
     """
-    day = today_bj()
     now = now_utc()
+    with _last_report_lock:
+        last = _last_report_at.get(user.id)
+        if last is not None and (now - last).total_seconds() < REPORT_MIN_INTERVAL:
+            day_cached = today_bj()
+            return {"ok": True, "throttled": True, "day": day_cached.isoformat(),
+                    "board_version": board_version(db, day_cached),
+                    "board": None, "unchanged": True}
+        _last_report_at[user.id] = now
+    day = today_bj()
     row = db.query(DailyUsage).filter(DailyUsage.user_id == user.id,
                                       DailyUsage.day == day).first()
     if row:
@@ -206,14 +247,66 @@ def report(body: ReportIn, user: User = Depends(auth_user), db=Depends(get_db)):
         db.add(DailyUsage(user_id=user.id, day=day, tokens=body.tokens,
                           updated_at=now))
     db.commit()
+    version = board_version(db, day)
+    # 瘦身：客户端已持有同一版本时只回版本号，不回 200 人全量榜单。
+    # 30s 一次上报 × 每台客户端，原来的全量回传是纯流量放大器。
+    if body.board_version and body.board_version == version:
+        return {"ok": True, "day": day.isoformat(), "board_version": version,
+                "board": None, "unchanged": True}
     board = build_board(db, day, limit=200)
-    return {"ok": True, "day": day.isoformat(), "board": board}
+    return {"ok": True, "day": day.isoformat(), "board_version": version,
+            "board": board}
+
+
+@app.get("/api/health")
+def health(db=Depends(get_db)):
+    """健康探针：供外部监控判断"进程活着且业务正常"。
+
+    返回 server_time / today / today_users，监控方据此判断是否"半死"
+    （进程在但业务停了）。不需要鉴权，也不泄露任何用户信息。
+    """
+    day = today_bj()
+    try:
+        n = db.query(DailyUsage).filter(DailyUsage.day == day).count()
+        db_ok = True
+    except Exception:
+        n, db_ok = -1, False
+    return {"ok": True, "server_time": now_utc().isoformat() + "Z",
+            "today": day.isoformat(), "today_users": n, "db_ok": db_ok}
 
 
 @app.get("/api/board")
-def board(user: User = Depends(auth_user), db=Depends(get_db)):
+def board(since_version: str = "", user: User = Depends(auth_user), db=Depends(get_db)):
+    """今日榜单。带 since_version 且版本一致时只回版本号（客户端省流量）。"""
     day = today_bj()
-    return {"ok": True, "day": day.isoformat(), "board": build_board(db, day, 200)}
+    version = board_version(db, day)
+    if since_version and since_version == version:
+        return {"ok": True, "day": day.isoformat(), "board_version": version,
+                "board": None, "unchanged": True}
+    return {"ok": True, "day": day.isoformat(), "board_version": version,
+            "board": build_board(db, day, 200)}
+
+
+def board_version(db, day) -> str:
+    """榜单版本：只用【会影响榜单展示的内容】算摘要。
+
+    重要：**不能包含 updated_at**。榜单展示的是 (名次, 昵称, 邮箱, token)，
+    而 updated_at 在每次上报时都会变——若把它算进版本号，客户端每次上报
+    都会拿到"版本变了"，瘦身就完全失效（2026-09-14 实测踩过这个坑）。
+
+    正确组成：日期 + 参与排名的人数 + token 总和 + 每个用户的 (id, tokens)，
+    这样只有真正影响榜单内容的变化才会导致版本号变化。
+    """
+    try:
+        rows = (db.query(DailyUsage)
+                .filter(DailyUsage.day == day, DailyUsage.tokens > 0)
+                .order_by(DailyUsage.user_id)
+                .all())
+    except Exception:
+        return ""
+    parts = ["%s:%s:%s" % (r.user_id, int(r.tokens or 0), 0) for r in rows]
+    raw = day.isoformat() + "|" + "|".join(parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def build_board(db, day, limit=200):

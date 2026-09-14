@@ -130,13 +130,22 @@ class RankClient:
         self.user = r.get("user")
         return r
 
-    def report_today(self, tokens: int):
-        """上报今日累计 token；返回 {ok, day, board}（board=今日全平台榜单）。"""
-        return self._request("POST", "/api/report", {"tokens": int(tokens)})
+    def report_today(self, tokens: int, board_version: str = ""):
+        """上报今日累计 token。
 
-    def board(self):
-        """拉取今日全平台榜单。"""
-        return self._request("GET", "/api/board")
+        带上已有的 board_version：服务器在榜单没变时只回版本号（board=None），
+        省掉每次 200 人的全量榜单回传。
+        """
+        return self._request("POST", "/api/report",
+                             {"tokens": int(tokens), "board_version": board_version or ""})
+
+    def board(self, since_version: str = ""):
+        """拉取今日全平台榜单（带版本号可省流量）。"""
+        from urllib.parse import quote
+        path = "/api/board"
+        if since_version:
+            path += "?since_version=" + quote(since_version)
+        return self._request("GET", path)
 
 
 # ---------- 会话持久化（独立 ranking.json；旧版 settings.json 的 rank 段自动迁移） ----------
@@ -186,11 +195,48 @@ def clear_session():
     save_session(s)
 
 
+def resolve_server() -> str:
+    """确定要连接的服务器地址（可配置，不必改代码重发版）。
+
+    优先级：
+      1. 环境变量 DSTM_RANK_SERVER（最高，便于临时切换/测试）
+      2. ranking.json 的 server 字段（用户在设置页填的，随会话持久化）
+      3. 内置默认值 _DEFAULT_SERVER
+
+    这样服务器迁移时用户自己就能改，不需要等新版本发布。
+    """
+    env = (os.environ.get("DSTM_RANK_SERVER") or "").strip()
+    if env:
+        return env.rstrip("/")
+    sess = load_session()
+    saved = (sess.get("server") or "").strip()
+    if saved:
+        return saved.rstrip("/")
+    return _DEFAULT_SERVER
+
+
+def set_server(url: str, persist: bool = True) -> str:
+    """设置服务器地址（设置页调用）。会做基本规范化并立即持久化。"""
+    url = (url or "").strip().rstrip("/")
+    if url and not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    if persist:
+        sess = load_session()
+        sess["server"] = url
+        save_session(sess)
+        # 地址变了，之前那份榜单就不再可信
+        _state["board"] = None
+        _state["day"] = None
+        _state["error"] = None
+        _state["error_streak"] = 0
+    return url
+
+
 def make_client():
     s = load_session()
-    server = s.get("server")
+    server = resolve_server()
     # 旧会话迁移：服务端已从 :8000 切到标准 80 端口，历史会话地址自动升级
-    if server and ("106.52.172.73:8000" in server or ":8000" in str(server)):
+    if server and (":8000" in str(server)):
         server = _DEFAULT_SERVER
         sess = load_session()
         sess["server"] = server
@@ -208,7 +254,7 @@ def get_state():
 
 _state = {"board": None, "day": None, "my_rank": None, "my_tokens": None,
           "last_time": None, "error": None, "token_invalid": False,
-          "error_streak": 0}
+          "error_streak": 0, "board_version": ""}
 
 
 def backoff_seconds():
@@ -240,7 +286,7 @@ def _sync_once(c):
     """
     total = _today_tokens()
     try:
-        r = c.report_today(total)
+        r = c.report_today(total, _state.get("board_version") or "")
     except RankError as exc:
         _state["error"] = str(exc)
         if exc.code == "TOKEN_INVALID":
@@ -253,10 +299,16 @@ def _sync_once(c):
         _state["error"] = _friendly_net_error(exc)
         _state["error_streak"] = (_state.get("error_streak") or 0) + 1
         return False
-    board = r.get("board") or []
     me = c.user or {}
     uid = me.get("user_id")
-    _state["board"] = board
+    # board=None 表示服务器判定"榜单未变化"，沿用本地缓存，避免无谓重传
+    if r.get("board") is not None:
+        board = r.get("board") or []
+        _state["board"] = board
+    else:
+        board = _state.get("board") or []
+    if r.get("board_version"):
+        _state["board_version"] = r["board_version"]
     _state["day"] = r.get("day")
     _state["my_rank"] = next((b["rank"] for b in board if b["user_id"] == uid), None)
     _state["my_tokens"] = total
@@ -282,7 +334,7 @@ def start_reporter(interval_seconds=_REPORT_INTERVAL):
         while True:
             try:
                 sess = load_session()
-                c = RankClient(base=sess.get("server"), token=sess.get("token", ""))
+                c = RankClient(base=resolve_server(), token=sess.get("token", ""))
                 c.user = sess.get("user")
                 if c.token:
                     _sync_once(c)

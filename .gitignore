@@ -29,3 +29,12 @@ server_rank/*.msi
 server_rank/**/*.msi
 server_rank/**/*.zip
 server_rank/**/*.exe
+
+# 服务器本地配置（含健康检查 token / webhook，勿提交）
+cloud_rank/health_config.json
+cloud_rank/archive/
+cloud_rank/health_state.json
+cloud_rank/watchdog.log
+cloud_rank/server.log*
+cloud_rank/cleanup.log
+cloud_rank/health.log*

@@ -1,0 +1,6 @@
+# 运行依赖（打包 exe 与源码运行都需要）
+pillow>=10.0.0        # 悬浮球/桌宠的图像渲染（抗锯齿、透明底）
+pystray>=0.19.0       # 系统托盘图标与菜单
+
+# 打包依赖
+pyinstaller>=6.0.0    # 构建单文件 exe（DeepSeekTokenMonitor.spec）

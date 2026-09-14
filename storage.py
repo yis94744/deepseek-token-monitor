@@ -16,8 +16,9 @@ from datetime import date, datetime, timedelta
 
 import pricing
 
-_lock = threading.Lock()   # 全局锁：保证多个线程访问 SQLite 时串行执行
+_lock = threading.RLock()  # 全局锁：保证多个线程访问 SQLite 时串行执行
 _db_path = None
+_local = threading.local()  # 每线程复用一个长连接（原来每次操作都新建连接）
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -76,11 +77,85 @@ CREATE TABLE IF NOT EXISTS balance_history (
 """
 
 
+class _ConnProxy:
+    """SQLite 连接的轻量代理：close() 变成 no-op，其余属性透传。
+
+    上下文：storage.py 里所有函数都写成
+        conn = _conn()
+        try: ...
+        finally: conn.close()
+    改成连接复用后，这个 close() 会把长连接关掉、复用就白做了。
+    用代理把 close() 吞掉，既保持原有代码结构不变，又实现真正的复用；
+    真正关闭由 shutdown() / 线程退出时统一处理。
+    """
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def close(self):
+        """no-op：连接由线程本地持有，不随单次操作关闭。"""
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self._conn.__enter__()
+
+    def __exit__(self, *exc):
+        return self._conn.__exit__(*exc)
+
+
+def close_thread_conn():
+    """真正关闭当前线程的长连接（退出前调用，确保 WAL 落盘）。"""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.commit()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+
+
 def _conn():
-    """新建 SQLite 连接（每次操作独立连接，配合全局锁保证线程安全）。"""
+    """取当前线程的 SQLite 长连接（不存在则创建），配合全局锁保证线程安全。
+
+    v1.13.29 优化：原来每次操作都 sqlite3.connect() 一个新连接——_tick 每
+    1.5 秒就要跑 3~6 次查询，即每 1.5 秒开关 3~6 次数据库文件。改为
+    thread-local 复用后，稳态下几乎不再新建连接。
+
+    连接参数：
+      - WAL：读写并发（保持原有行为）
+      - synchronous=NORMAL：WAL 下的推荐值，崩溃安全性与 FULL 相当但快得多
+      - busy_timeout：与原 timeout=10 等价，锁冲突时等待而非立刻报错
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            # 轻量探活：连接可能被外部因素关闭（如磁盘休眠/文件被删）
+            conn.execute("SELECT 1")
+            # 必须始终返回代理：调用方的 finally 会调用 conn.close()，
+            # 若这里把原始连接交出去，长连接会被真正关闭，复用就失效了。
+            return _ConnProxy(conn)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+
     conn = sqlite3.connect(_db_path, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=10000;")
+    _local.conn = conn
+    return _ConnProxy(conn)
 
 
 def init_db(data_dir: str):
@@ -88,6 +163,7 @@ def init_db(data_dir: str):
     global _db_path
     os.makedirs(data_dir, exist_ok=True)
     _db_path = os.path.join(data_dir, "usage.db")
+    _local.conn = None  # 路径可能变化，丢弃旧的线程本地连接
     with _lock:
         conn = _conn()
         try:
