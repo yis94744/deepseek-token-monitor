@@ -15,6 +15,16 @@ import re
 import subprocess
 import sys
 
+# 中文输出兼容：CI 的英文 Windows 控制台是 cp1252，直接 print 中文会抛
+# UnicodeEncodeError（本地中文 Windows 不暴露）。统一切 UTF-8。
+for _name in ("stdout", "stderr"):
+    _s = getattr(sys, _name, None)
+    try:
+        if _s is not None and hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 

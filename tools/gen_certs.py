@@ -16,6 +16,17 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+# 中文输出兼容：英文 Windows 控制台默认 cp1252，print 中文会抛
+# UnicodeEncodeError（本地中文 Windows 不暴露）。统一切到 UTF-8。
+for _name in ("stdout", "stderr"):
+    _s = getattr(sys, _name, None)
+    try:
+        if _s is not None and hasattr(_s, "reconfigure"):
+            _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 SERVER_IP = os.environ.get("CLOUDRANK_IP", "106.52.172.73")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.path.dirname(_HERE), "cloud_rank", "certs")
