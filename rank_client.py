@@ -270,13 +270,22 @@ def backoff_seconds():
 
 # ---------- 后台上报线程（30s，常驻） ----------
 def _today_tokens():
-    """本机当日累计 token（全部数据源：命中+未命中+输出）。"""
+    """本机当日累计 token（全部数据源：命中+未命中+输出）。
+
+    返回 None 表示【读取失败/数据库未就绪】，调用方必须跳过本次上报——
+    绝不能把失败当成 0：服务器存的是"当日累计最新值"，一旦用 0 覆盖，
+    当天已累积的真实用量就永久丢了（2026-09-14 实际踩过：调试脚本在
+    未初始化 storage 的进程里上报，把当天 260 万 token 覆盖成了 0）。
+    """
     try:
         import storage
+        if not getattr(storage, "_db_path", None):
+            return None          # 数据库尚未初始化，不能报 0
         s = storage.today_stats()
-        return int((s["cache_hit"] or 0) + (s["cache_miss"] or 0) + (s["completion"] or 0))
+        total = int((s["cache_hit"] or 0) + (s["cache_miss"] or 0) + (s["completion"] or 0))
+        return total
     except Exception:
-        return 0
+        return None              # 读取异常同样跳过，不污染服务端数据
 
 
 def _sync_once(c):
@@ -285,6 +294,10 @@ def _sync_once(c):
     401 时把 _state["token_invalid"] 置 True，UI 端读取后可清 ranking.json 并回登录页。
     """
     total = _today_tokens()
+    if total is None:
+        # 本地库未就绪：跳过本次上报（下次再报），避免用 0 覆盖服务端累计值
+        _state["error"] = "本地数据库未就绪，暂缓上报"
+        return False
     try:
         r = c.report_today(total, _state.get("board_version") or "")
     except RankError as exc:
