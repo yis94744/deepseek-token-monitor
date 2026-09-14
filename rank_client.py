@@ -26,7 +26,7 @@ _APP_DIR = os.path.join(os.environ.get("APPDATA", ""), "DeepSeekTokenMonitor")
 _SETTINGS_PATH = os.path.join(_APP_DIR, "settings.json")
 _RANK_PATH = os.path.join(_APP_DIR, "ranking.json")  # 独立会话文件（与 settings.json 隔离防并发覆盖）
 _LEGACY_RANK_KEY = "rank"  # 旧版把会话存在 settings.json 的 rank 段
-_DEFAULT_SERVER = "http://106.52.172.73"
+_DEFAULT_SERVER = "https://106.52.172.73"   # 已启用 TLS（私有 CA，见 tools/gen_certs.py）
 _REPORT_INTERVAL = 30  # 秒：基础间隔（失败自动退避，上限 300s）
 
 
@@ -295,7 +295,9 @@ def set_server(url: str, persist: bool = True) -> str:
 def make_client():
     s = load_session()
     server = resolve_server()
-    # 旧会话迁移：服务端已从 :8000 切到标准 80 端口，历史会话地址自动升级
+    # 旧会话迁移：服务端已从 :8000 切到标准 80 端口，历史会话地址自动升级。
+    # 注：http -> https 的升级不在这里做——_request 会优先尝试 https，
+    # 成功即自动加密，失败则回退，用户无需改配置。
     if server and (":8000" in str(server)):
         server = _DEFAULT_SERVER
         sess = load_session()
