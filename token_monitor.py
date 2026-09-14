@@ -2096,6 +2096,8 @@ class App:
                   width=32).pack(side="left")
         ttk.Button(row_box, text="保存并重连",
                    command=self._apply_rank_server).pack(side="left", padx=6)
+        ttk.Button(row_box, text="信任服务器证书",
+                   command=self._trust_server_cert).pack(side="left", padx=2)
         self.lbl_rank_server_state = tk.Label(rank_box, text="", bg=C_BG, fg=C_SUB,
                                               font=(FONT, 8))
         self.lbl_rank_server_state.pack(anchor="w")
@@ -2196,6 +2198,44 @@ class App:
 
         refresh()
         return refresh
+
+    def _trust_server_cert(self):
+        """设置页：把服务器 CA 安装到系统受信任根，让 HTTPS 校验通过。
+
+        服务器用私有 CA 签发的证书（裸 IP 无法申请公信证书）。安装后
+        Windows 与 Python 都会正常校验，且只信任这一张 CA，不降低其他
+        站点的安全性。卸载可用 trust_ca.py --uninstall。
+        """
+        import trust_ca
+        if trust_ca.is_installed():
+            if messagebox.askyesno(
+                    "服务器证书",
+                    "已信任服务器证书。\n\n是否改为「不再信任」（移除）？"):
+                ok, msg = trust_ca.uninstall()
+                self.lbl_rank_server_state.config(
+                    text=msg, fg=C_GREEN if ok else C_RED)
+            return
+
+        # 证书随程序分发（assets 或 cloud_rank/certs 任一位置）
+        candidates = [
+            os.path.join(_base_dir(), "certs", "ca.crt"),
+            _res("ca.crt"),
+            os.path.join(_base_dir(), "cloud_rank", "certs", "ca.crt"),
+        ]
+        path = next((p for p in candidates if p and os.path.isfile(p)), None)
+        if not path:
+            messagebox.showerror(
+                "找不到证书",
+                "未找到服务器证书文件 ca.crt。\n"
+                "请确认程序完整安装，或联系管理员获取。")
+            return
+        ok, msg = trust_ca.install(path)
+        self.lbl_rank_server_state.config(text=msg, fg=C_GREEN if ok else C_RED)
+        if ok:
+            messagebox.showinfo(
+                "已信任服务器证书",
+                "已把服务器证书加入系统受信任根，HTTPS 连接现在可以正常校验。\n\n"
+                "如需移除，再次点击此按钮即可。")
 
     def _apply_rank_server(self):
         """设置页：保存排名服务器地址并立即重连验证（失败给出人话原因）。"""

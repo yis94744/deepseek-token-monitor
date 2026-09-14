@@ -50,6 +50,8 @@ def _friendly_net_error(exc) -> str:
         return "无法连接服务器（服务可能维护中或网络不通）"
     if "resolve" in low or "getaddrinfo" in low or "11001" in msg or "解析" in m or "dns" in low:
         return "无法解析服务器地址，请检查网络"
+    if "certificate_verify_failed" in low or "certificate verify failed" in low:
+        return "服务器证书未受信任：请在设置页点击「信任服务器证书」后重试"
     if "ssl" in low or "证书" in m:
         return "服务器安全连接异常，请稍后重试"
     if "10060" in msg or "10061" in msg or "10065" in msg:
@@ -74,6 +76,22 @@ class RankClient:
         self.token = token or ""
         self.user = None
 
+    # ---------- HTTPS 支持 ----------
+    @staticmethod
+    def _ssl_context():
+        """为 https 请求构造 SSL 上下文（可选：信任私有 CA）。
+
+        服务器当前用私有 CA 签发的证书（因为裸 IP 拿不到公信证书）。
+        用户在设置页选择"信任服务器证书"后，CA 会被安装到系统受信任根，
+        这里即可用系统信任链正常校验；未安装时给出明确提示而不是晦涩的
+        CERTIFICATE_VERIFY_FAILED。
+        """
+        import ssl
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            return None
+
     # ---------- HTTP 基础 ----------
     def _request(self, method, path, payload=None, with_auth=True, timeout=8):
         import urllib.error
@@ -86,8 +104,13 @@ class RankClient:
         if with_auth and self.token:
             headers["Authorization"] = "Bearer " + self.token
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        kwargs = {"timeout": timeout}
+        if url.lower().startswith("https://"):
+            ctx = self._ssl_context()
+            if ctx is not None:
+                kwargs["context"] = ctx
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, **kwargs) as resp:
                 raw = resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             code = e.code
