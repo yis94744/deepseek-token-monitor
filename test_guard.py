@@ -2,6 +2,8 @@
 """test_guard.py — 单实例互斥与崩溃兜底的回归测试。"""
 import os
 import shutil
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows）
 import sys
 import threading
 

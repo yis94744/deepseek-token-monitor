@@ -2,6 +2,8 @@
 """按 API Key 统计功能的临时自测脚本（用完即删，不入库）。"""
 import os
 import shutil
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows）
 import tempfile
 from datetime import datetime, timedelta
 

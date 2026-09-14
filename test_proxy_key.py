@@ -2,6 +2,8 @@
 """代理层集成测试：真实 HTTP 请求 → 抓 Authorization 头 → 入库 Key 指纹（临时脚本，用完即删）。"""
 import json
 import shutil
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows）
 import tempfile
 import threading
 import time

@@ -2,6 +2,8 @@
 """托盘「检查更新」菜单动作测试：已是最新/发现新版/检查失败 三分支。"""
 import os
 import sys
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows/cp1252）
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

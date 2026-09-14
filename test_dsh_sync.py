@@ -2,6 +2,8 @@
 """DSH 同步 v2 测试：目录分片/旧单文件解析、差分去重、真实数据 dry-run。"""
 import json
 import os
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows）
 import shutil
 import sys
 import tempfile

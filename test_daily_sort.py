@@ -2,6 +2,8 @@
 """每日统计列头排序测试：真实物理点击列头，验证首行变化与合计行沉底。"""
 import os
 import sys
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows/cp1252）
 import time
 import ctypes
 

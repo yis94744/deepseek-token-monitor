@@ -8,6 +8,8 @@
 import os
 import sys
 
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows/cp1252）
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import rank_client as rc

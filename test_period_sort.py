@@ -2,6 +2,8 @@
 """时段统计列头排序测试：与每日统计同款共享组件。"""
 import os
 import sys
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows/cp1252）
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

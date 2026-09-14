@@ -2,6 +2,8 @@
 """防缩保护 guard 单测：切页后窗口被意外缩小，guard 应自动还原（独立脚本）。"""
 import os
 import sys
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows/cp1252）
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -8,6 +8,8 @@
 """
 import os
 import shutil
+
+import utf8_output  # noqa: F401  # 中文输出兼容（CI 为英文 Windows）
 import sys
 import tempfile
 
