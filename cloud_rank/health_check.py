@@ -85,6 +85,25 @@ def push(text):
         log("  告警推送失败: %s" % exc)
 
 
+def check_disk():
+    """磁盘空间检查（C 盘剩余 < 15% 或 < 2GB 时告警）。
+
+    服务器 C 盘只有 ~40GB，日志/备份写满会导致服务静默异常。
+    """
+    try:
+        import shutil as _sh
+        total, used, free = _sh.disk_usage(BASE)
+        free_gb = free / 1024 ** 3
+        total_gb = total / 1024 ** 3
+        pct = free / total * 100 if total else 0
+        if free_gb < 2 or pct < 15:
+            return False, "磁盘空间不足：C 盘剩余 %.1f GB（%.0f%%），总 %.1f GB" % (
+                free_gb, pct, total_gb)
+        return True, "C 盘剩余 %.1f GB（%.0f%%）" % (free_gb, pct)
+    except Exception as exc:
+        return True, "磁盘检查跳过: %s" % exc
+
+
 def probe_http():
     """HTTP 探活：任何 HTTP 状态码都算"监听活着"。"""
     try:
@@ -122,6 +141,17 @@ def main():
     ok2, d2 = (True, "") if ok1 else (False, "跳过")
     if ok1:
         ok2, d2 = probe_business()
+    ok3, d3 = check_disk()
+
+    # 磁盘问题单独记一行（不参与"连续失败3次"计数，因为它不是服务故障）
+    if not ok3:
+        log("磁盘告警: " + d3)
+        if not st.get("disk_alerted"):
+            st["disk_alerted"] = True
+            push("[CloudRank] " + d3)
+    elif st.get("disk_alerted"):
+        st["disk_alerted"] = False
+        log("磁盘空间已恢复: " + d3)
 
     healthy = ok1 and ok2
     if healthy:

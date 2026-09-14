@@ -525,6 +525,44 @@ def admin_daily(days: int = 30, _: Admin = Depends(admin_auth), db=Depends(get_d
     return {"ok": True, "daily": out}
 
 
+@app.get("/api/admin/staleness")
+def admin_staleness(_: Admin = Depends(admin_auth), db=Depends(get_db)):
+    """各用户「最后上报距今」列表。
+
+    用途：一眼区分"全平台都停了"（服务端问题）与"个别用户掉线"（客户端问题），
+    不必再去逐条翻 server.log。
+    """
+    today = today_bj()
+    rows = db.query(DailyUsage).order_by(DailyUsage.updated_at.desc()).all()
+    per_user = {}
+    for r in rows:
+        cur = per_user.get(r.user_id)
+        if cur is None or (r.updated_at and cur.updated_at and r.updated_at > cur.updated_at):
+            per_user[r.user_id] = r
+    users = {u.id: u for u in db.query(User).all()}
+    now = now_utc()
+    out = []
+    for uid, r in per_user.items():
+        u = users.get(uid)
+        if not u:
+            continue
+        age = (now - r.updated_at).total_seconds() if r.updated_at else None
+        out.append({
+            "user_id": uid,
+            "nickname": u.nickname or mask_email(u.email).split("@")[0],
+            "email": mask_email(u.email),
+            "last_report_day": r.day.isoformat(),
+            "last_report_at": r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
+            "seconds_since": int(age) if age is not None else None,
+            "tokens_last_day": int(r.tokens or 0),
+        })
+    out.sort(key=lambda x: (x["seconds_since"] is None, x["seconds_since"] or 0))
+    active = sum(1 for x in out
+                 if x["seconds_since"] is not None and x["seconds_since"] < 1800)
+    return {"ok": True, "today": today.isoformat(), "active_last_30min": active,
+            "total_reporters": len(out), "users": out}
+
+
 @app.get("/api/admin/board")
 def admin_board(_: Admin = Depends(admin_auth), db=Depends(get_db)):
     """今日全平台榜单（管理员视角，邮箱脱敏）。"""
@@ -580,6 +618,7 @@ _ADMIN_HTML = """<!DOCTYPE html>
   <span class="tab on" data-p="board">今日榜单</span>
   <span class="tab" data-p="users">用户列表</span>
   <span class="tab" data-p="trend">近30天趋势</span>
+   <span class="tab" data-p="stale">用户活跃度</span>
  </div>
  <div class="panel on" id="p-board">
   <table><thead><tr><th>#</th><th>昵称</th><th>邮箱</th><th style="text-align:right">今日 Token</th></tr></thead>
@@ -592,6 +631,11 @@ _ADMIN_HTML = """<!DOCTYPE html>
  </div>
  <div class="panel" id="p-trend">
   <canvas id="cv" width="940" height="220"></canvas>
+ </div>
+ <div class="panel" id="p-stale">
+  <p style="color:#8a6a4d;font-size:13px" id="stale_sum"></p>
+  <table><thead><tr><th>用户</th><th>最后上报日期</th><th>最后上报时间</th><th>距今</th><th style="text-align:right">当日Token</th></tr></thead>
+  <tbody id="stale"></tbody></table>
  </div>
 </div>
 </div>
@@ -627,6 +671,17 @@ async function loadUsers(){const q=document.getElementById('q').value.trim();
   '<tr><td>'+u.user_id+'</td><td>'+u.email+'</td><td>'+u.nickname+'</td><td>'+fmt(u.today_tokens)
   +'</td><td>'+u.updated_at+'</td><td>'+u.created_at+'</td></tr>').join(''):
   '<tr><td colspan=6 style="color:#8a6a4d">暂无用户</td></tr>');}
+async function loadStale(){const j=await api('/api/admin/staleness',
+  {headers:{Authorization:'Bearer '+tok}});
+ document.getElementById('stale_sum').textContent=
+  '共 '+j.total_reporters+' 个上报过的用户，其中 '+j.active_last_30min+' 个近 30 分钟活跃 · '+j.today;
+ const tb=document.getElementById('stale');tb.innerHTML=(j.users.length?j.users.map(u=>{
+  const s=u.seconds_since;
+  const ago=s==null?'-':(s<60?s+' 秒前':(s<3600?Math.floor(s/60)+' 分钟前':(s<86400?Math.floor(s/3600)+' 小时前':Math.floor(s/86400)+' 天前')));
+  const c=(s!=null&&s<1800)?'#3f9e5a':((s!=null&&s<86400)?'#d77522':'#d9534f');
+  return '<tr><td>'+u.nickname+'</td><td>'+u.last_report_day+'</td><td>'+u.last_report_at
+   +'</td><td style="color:'+c+'">'+ago+'</td><td>'+fmt(u.tokens_last_day)+'</td></tr>';
+ }).join(''):'<tr><td colspan=5 style="color:#8a6a4d">暂无数据</td></tr>');}
 async function loadTrend(){const j=await api('/api/admin/daily',
   {headers:{Authorization:'Bearer '+tok}});
  const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
@@ -645,7 +700,7 @@ async function enter(){document.getElementById('auth').style.display='none';
  try{await loadAll();}catch(e){logout();
   document.getElementById('aerr').textContent=String(e.message||e);}}
 async function loadAll(){try{await loadOverview();await loadBoard();await loadUsers();
- await loadTrend();}catch(e){document.getElementById('aerr').textContent=String(e.message||e);}}
+ await loadTrend();await loadStale();}catch(e){document.getElementById('aerr').textContent=String(e.message||e);}}
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',e=>{
  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('on'));
