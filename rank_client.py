@@ -75,6 +75,20 @@ class RankClient:
         self.base = (base or _DEFAULT_SERVER).rstrip("/")
         self.token = token or ""
         self.user = None
+        self._https_failed = False   # 缓存：HTTPS 不可用时直接走 HTTP，避免每次都等超时
+
+    # ---------- HTTPS 优先 + 自动回退 ----------
+    def _https_alternative(self):
+        """返回同一主机的 https 地址；当前已是 https 或已判定不可用则返回 None。"""
+        if self._https_failed or not self.base.startswith("http://"):
+            return None
+        return "https://" + self.base[len("http://"):]
+
+    def _http_fallback(self):
+        """返回同一主机的 http 地址（当前是 https 时用于回退）。"""
+        if not self.base.startswith("https://"):
+            return None
+        return "http://" + self.base[len("https://"):]
 
     # ---------- HTTPS 支持 ----------
     @staticmethod
@@ -103,32 +117,55 @@ class RankClient:
             data = json.dumps(payload).encode("utf-8")
         if with_auth and self.token:
             headers["Authorization"] = "Bearer " + self.token
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        kwargs = {"timeout": timeout}
-        if url.lower().startswith("https://"):
-            ctx = self._ssl_context()
-            if ctx is not None:
-                kwargs["context"] = ctx
-        try:
-            with urllib.request.urlopen(req, **kwargs) as resp:
-                raw = resp.read().decode("utf-8", "replace")
-        except urllib.error.HTTPError as e:
-            code = e.code
-            raw = e.read().decode("utf-8", "replace")
-            # 401=登录失效（token 被顶掉/过期/账号被改密码）；UI 应当清本地会话回登录页
-            if code == 401:
-                raise RankError(str((json.loads(raw) if raw else {}).get("detail", "登录已失效")) or "登录已失效",
-                                "TOKEN_INVALID")
-            raise RankError(f"请求失败({code}): {raw[:120]}")
-        except Exception as exc:
-            raise RankError(_friendly_net_error(exc), "NETWORK")
-        try:
-            j = json.loads(raw)
-        except Exception:
-            raise RankError(f"服务器返回无法解析：{raw[:200]}")
-        if "detail" in j and not j.get("ok"):
-            raise RankError(str(j.get("detail") or "请求失败"))
-        return j
+        attempts = [url]
+        alt_https = self._https_alternative()
+        if alt_https:
+            # HTTPS 优先：明文 HTTP 只是过渡，能加密就加密
+            attempts = [alt_https + path, url]
+        elif self.base.startswith("https://"):
+            http_alt = self._http_fallback()
+            if http_alt:
+                attempts.append(http_alt + path)
+
+        last_exc = None
+        for attempt_url in attempts:
+            is_https = attempt_url.lower().startswith("https://")
+            req = urllib.request.Request(attempt_url, data=data, headers=headers,
+                                         method=method)
+            kwargs = {"timeout": timeout}
+            if is_https:
+                ctx = self._ssl_context()
+                if ctx is not None:
+                    kwargs["context"] = ctx
+            try:
+                with urllib.request.urlopen(req, **kwargs) as resp:
+                    raw = resp.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as e:
+                # 服务器有响应（含 401），说明这条链路可用，不再回退
+                code = e.code
+                raw = e.read().decode("utf-8", "replace")
+                if code == 401:
+                    raise RankError(
+                        str((json.loads(raw) if raw else {}).get("detail", "登录已失效"))
+                        or "登录已失效", "TOKEN_INVALID")
+                raise RankError(f"请求失败({code}): {raw[:120]}")
+            except Exception as exc:
+                last_exc = exc
+                if is_https:
+                    # HTTPS 不可用（常见于服务器 443 未放行）：记住并回退到 HTTP，
+                    # 这样用户不需要改任何配置也能继续用；放行后重启即自动走加密。
+                    self._https_failed = True
+                    continue
+                raise RankError(_friendly_net_error(exc), "NETWORK")
+            try:
+                j = json.loads(raw)
+            except Exception:
+                raise RankError(f"服务器返回无法解析：{raw[:200]}")
+            if "detail" in j and not j.get("ok"):
+                raise RankError(str(j.get("detail") or "请求失败"))
+            return j
+
+        raise RankError(_friendly_net_error(last_exc) if last_exc else "连接失败", "NETWORK")
 
     # ---------- 业务接口 ----------
     def register(self, email, password, nickname=""):
