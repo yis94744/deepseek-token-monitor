@@ -16,7 +16,7 @@
 额外判据（能抓出"进程活着但业务停止"的半死状态）：
   - 排名通道：服务器返回的 day 落后本地日期 >= 1 天 -> 直接 error
 """
-from datetime import date, datetime
+from datetime import datetime
 
 # 等级 -> 颜色（与 token_monitor 的配色体系一致）
 LEVEL_COLORS = {
@@ -98,11 +98,11 @@ def humanize(seconds):
     return "%d 天前" % (seconds // 86400)
 
 
-def snapshot(state, rank_state=None, now=None):
+def snapshot(state, now=None):
     """汇总所有通道的健康状态，供界面一次性渲染。
 
     返回 {通道名: {level, detail, color, since}}
-    通道：proxy / balance / cc / dsh / codebuddy / workbuddy / rank / update
+    通道：proxy / balance / cc / dsh / codebuddy / workbuddy / update
     """
     out = {}
 
@@ -142,44 +142,6 @@ def snapshot(state, rank_state=None, now=None):
                   else "%s · 上次成功 %s" % (label, humanize(since)))
         out[key] = {"level": level, "detail": detail, "since": since,
                     "label": label, "last_ok": info.get("last_time")}
-
-    # ---- 排名通道（核心：能识别"服务器异常"）----
-    if rank_state is None:
-        out["rank"] = {"level": "off", "detail": "未登录", "since": None}
-    else:
-        token = rank_state.get("token")
-        if not token:
-            out["rank"] = {"level": "off", "detail": "未登录", "since": None}
-        else:
-            server_day = rank_state.get("day")
-            stale = False
-            stale_reason = ""
-            if server_day:
-                try:
-                    d = date.fromisoformat(str(server_day))
-                    behind = (date.today() - d).days
-                    if behind >= 1:
-                        stale = True
-                        stale_reason = "服务器数据停留在 %s（落后 %d 天）" % (server_day, behind)
-                except Exception:
-                    pass
-            else:
-                # 从未拿到过 day：若已经报错，视为异常
-                if rank_state.get("error"):
-                    stale = True
-                    stale_reason = str(rank_state["error"])[:70]
-            level, since = evaluate(rank_state.get("last_time"),
-                                    rank_state.get("error"),
-                                    rank_state.get("error_streak", 0),
-                                    True, extra_stale=stale)
-            if stale and stale_reason:
-                detail = "服务器异常：" + stale_reason
-            elif rank_state.get("error"):
-                detail = "%s · 上次成功 %s" % (str(rank_state["error"])[:50], humanize(since))
-            else:
-                detail = "同步正常 · %s" % humanize(since)
-            out["rank"] = {"level": level, "detail": detail, "since": since,
-                           "last_ok": rank_state.get("last_time")}
 
     # ---- 更新检查 ----
     up = state.get("update")

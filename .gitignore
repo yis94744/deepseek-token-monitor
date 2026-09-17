@@ -14,30 +14,8 @@ CONTEXT_SUMMARY.md
 _err.txt
 .tmp/
 
-# 云排名/部署临时
-cloud_rank/test_rank.db
-cloud_rank_deploy.zip
+# 日志
 *.log
 
-# 部署工具（含服务器凭据，勿提交）
-deploy_tools.py
+# 本地工作目录
 work/
-
-# server_rank 部署资源（体积巨大，不入库）
-server_rank/tools/
-server_rank/*.msi
-server_rank/**/*.msi
-server_rank/**/*.zip
-server_rank/**/*.exe
-
-# TLS 私钥与证书（私钥绝不入库；证书可由 tools/gen_certs.py 重新生成）
-cloud_rank/certs/
-
-# 服务器本地配置（含健康检查 token / webhook，勿提交）
-cloud_rank/health_config.json
-cloud_rank/archive/
-cloud_rank/health_state.json
-cloud_rank/watchdog.log
-cloud_rank/server.log*
-cloud_rank/cleanup.log
-cloud_rank/health.log*

@@ -28,7 +28,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pillow pystray
-          pip install paramiko
 
       - name: 语法检查（全量编译）
         run: python -m compileall -q . -x "(.tmp|build|dist|__pycache__|work)"

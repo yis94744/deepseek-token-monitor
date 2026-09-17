@@ -54,38 +54,6 @@ def test_disabled_is_off():
     print("PASS 5 未启用判 off")
 
 
-def test_rank_detects_stale_server_day():
-    """核心场景：服务器返回的 day 落后 -> 直接 error，并给出明确文案。"""
-    rs = {
-        "token": "x" * 64,
-        "last_time": _ago(minutes=1),      # 上报本身"刚刚成功"
-        "error": None,
-        "error_streak": 0,
-        "day": (date.today() - timedelta(days=5)).isoformat(),   # 数据停 5 天前
-    }
-    snap = health.snapshot({}, rs)
-    rank = snap["rank"]
-    assert rank["level"] == "error", "服务器数据落后应判 error，实际 %s" % rank["level"]
-    assert "服务器异常" in rank["detail"], "文案未指明服务器异常: %s" % rank["detail"]
-    assert "5" in rank["detail"], "文案未给出落后天数: %s" % rank["detail"]
-    print("PASS 6 排名通道识别「服务器数据落后」（%s）" % rank["detail"][:50])
-
-
-def test_rank_ok_when_day_current():
-    """服务器 day = 今天 -> ok。"""
-    rs = {"token": "x", "last_time": _ago(minutes=1), "error": None,
-          "error_streak": 0, "day": date.today().isoformat()}
-    snap = health.snapshot({}, rs)
-    assert snap["rank"]["level"] == "ok", snap["rank"]
-    print("PASS 7 服务器正常时判 ok")
-
-
-def test_rank_off_when_logged_out():
-    snap = health.snapshot({}, {"token": None})
-    assert snap["rank"]["level"] == "off", snap["rank"]
-    print("PASS 8 未登录判 off")
-
-
 def test_proxy_states():
     """代理的四种状态映射正确。"""
     assert health.snapshot({"proxy_ready": True})["proxy"]["level"] == "ok"
@@ -131,9 +99,6 @@ if __name__ == "__main__":
     test_error_after_one_hour()
     test_error_on_fail_streak()
     test_disabled_is_off()
-    test_rank_detects_stale_server_day()
-    test_rank_ok_when_day_current()
-    test_rank_off_when_logged_out()
     test_proxy_states()
     test_midnight_rollover()
     test_overall_precedence()
