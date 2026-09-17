@@ -35,7 +35,7 @@ import updater
 import workbuddy_sync
 
 # 当前版本（与 installer.iss 的 AppVersion 保持一致；用于自动更新检测）
-APP_VERSION = "1.14.0"
+APP_VERSION = "1.15.0"
 
 
 # ================= 路径与资源 =================
