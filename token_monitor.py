@@ -790,6 +790,101 @@ class App:
         self.root.bind_class("Button", "<Enter>", _btn_hover_enter)
         self.root.bind_class("Button", "<Leave>", _btn_hover_leave)
 
+    # ---------- UI 基础组件（卡片式布局） ----------
+    def _card(self, parent, title=None, subtitle=None):
+        """创建一个卡片容器：白底、圆角感边框、可选标题。
+
+        返回 (card, body)。调用方把内容 pack 到 body 里即可。
+        统一内边距与间距，避免各页面自己写零散的 padx/pady。
+        """
+        outer = tk.Frame(parent, bg=C_BG)
+        outer.pack(fill="x", pady=(0, 10))
+        card = tk.Frame(outer, bg=C_CARD, highlightbackground=C_BROWN_LIGHT,
+                        highlightthickness=1, bd=0)
+        card.pack(fill="x")
+        head = tk.Frame(card, bg=C_CARD)
+        head.pack(fill="x", padx=14, pady=(10, 0))
+        if title:
+            tk.Label(head, text=title, bg=C_CARD, fg=C_BROWN_DARK,
+                     font=(FONT, 10, "bold")).pack(anchor="w")
+        if subtitle:
+            tk.Label(head, text=subtitle, bg=C_CARD, fg=C_SUB,
+                     font=(FONT, 8)).pack(anchor="w", pady=(2, 0))
+        body = tk.Frame(card, bg=C_CARD)
+        body.pack(fill="x", padx=14, pady=(8, 12))
+        return card, body
+
+    def _setting_row(self, parent, label, hint=None, label_width=10):
+        """一行设置项：左侧标签 + 右侧控件区。
+
+        返回 (row, holder)：把控件 pack 到 holder 里。
+        标签用固定字符宽度（不是定宽 Frame + pack_propagate(False)）——
+        后者在 pack 布局下会把标签压成省略号。
+        """
+        row = tk.Frame(parent, bg=C_CARD)
+        row.pack(fill="x", pady=(0, 8))
+        tk.Label(row, text=label, bg=C_CARD, fg=C_TEXT, font=(FONT, 9),
+                 anchor="w", justify="left", width=label_width).pack(
+            side="left", anchor="n")
+        holder = tk.Frame(row, bg=C_CARD)
+        holder.pack(side="left", fill="x", expand=True)
+        if hint:
+            # 说明文字必须另起一个 Frame（在 row 之外），否则 pack 会把它
+            # 排在 holder 右侧，与输入框挤在同一行。
+            wrap = tk.Frame(parent, bg=C_CARD)
+            wrap.pack(fill="x", pady=(0, 8))
+            tk.Label(wrap, text=hint, bg=C_CARD, fg=C_SUB, font=(FONT, 8),
+                     anchor="w", justify="left", wraplength=440).pack(
+                side="left", padx=(64, 0))
+        return row, holder
+
+    def _stat_strip(self, parent, items=(), padx=12, pady=8):
+        """统一的统计条：若干「标签 数值」对，用浅色竖线分隔。
+
+        返回 (frame, setter)；setter(values) 按顺序更新数值。
+        相比各页面自己 grid 一排 Label，这个组件保证间距/字体/间距一致。
+        """
+        frame = tk.Frame(parent, bg=C_BG)
+        frame.pack(fill="x", padx=padx, pady=pady)
+        values = []
+        for i, (label, init) in enumerate(items):
+            if i:
+                sep = tk.Frame(frame, bg=C_BROWN_LIGHT, width=1, height=14)
+                sep.pack(side="left", padx=12)
+            tk.Label(frame, text=label, bg=C_BG, fg=C_SUB,
+                     font=(FONT, 9)).pack(side="left")
+            v = tk.Label(frame, text=init, bg=C_BG, fg=C_TEXT, font=(FONT, 9, "bold"))
+            v.pack(side="left", padx=(5, 0))
+            values.append(v)
+
+        def setter(*texts, **kw):
+            for lbl, t in zip(values, texts):
+                try:
+                    lbl.config(text=t)
+                except Exception:
+                    pass
+            if "cost_color" in kw:
+                try:
+                    values[-1].config(fg=kw["cost_color"])
+                except Exception:
+                    pass
+
+        return frame, setter
+
+    def _status_dot(self, parent, text="", level="ok"):
+        """带彩色圆点的状态行（用于把分散的状态文字收进卡片）。"""
+        colors = {"ok": "#3f9e5a", "warn": C_ORANGE_DEEP, "error": C_RED,
+                  "off": C_SUB, "unknown": C_SUB}
+        row = tk.Frame(parent, bg=C_CARD)
+        row.pack(fill="x", pady=1)
+        cv = tk.Canvas(row, width=8, height=8, bg=C_CARD, highlightthickness=0)
+        cv.create_oval(1, 1, 7, 7, fill=colors.get(level, C_SUB), outline="")
+        cv.pack(side="left", padx=(0, 6))
+        lbl = tk.Label(row, text=text, bg=C_CARD, fg=C_TEXT, font=(FONT, 9),
+                       anchor="w", justify="left")
+        lbl.pack(side="left", fill="x", expand=True)
+        return row, cv, lbl
+
     def _keep_image(self, path: str, subsample: int = 1) -> tk.PhotoImage:
         """加载图片并保留引用；gif 显示第一帧。"""
         img = tk.PhotoImage(file=path)
@@ -1188,16 +1283,13 @@ class App:
     def _add_summary_page(self, nb, title, index, agg_fn, brk_fn, src_fn):
         page = tk.Frame(nb, bg=C_BG)
         nb.add(page, text=title)
-        top = tk.Frame(page, bg=C_BG)
-        top.pack(fill="x", padx=12, pady=8)
-        lbl_requests = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
-        lbl_requests.grid(row=0, column=0, sticky="w", padx=(0, 16))
-        lbl_input = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
-        lbl_input.grid(row=0, column=1, sticky="w", padx=(0, 16))
-        lbl_output = tk.Label(top, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 9))
-        lbl_output.grid(row=0, column=2, sticky="w", padx=(0, 16))
-        lbl_cost = tk.Label(top, text="", bg=C_BG, fg=C_ORANGE_DEEP, font=(FONT, 10, "bold"))
-        lbl_cost.grid(row=0, column=3, sticky="w")
+        # 统计条：标签与数值分离、竖线分隔，费用单独用高亮色
+        card = tk.Frame(page, bg=C_CARD, highlightbackground=C_BROWN_LIGHT,
+                        highlightthickness=1)
+        card.pack(fill="x", padx=12, pady=(10, 0))
+        _strip, set_strip = self._stat_strip(
+            card, items=(("请求数", "-"), ("输入", "-"), ("输出", "-"), ("费用", "-")),
+            padx=14, pady=10)
 
         # 左右两栏：左=按模型，右=按客户端来源
         mid = tk.Frame(page, bg=C_BG)
@@ -1217,11 +1309,13 @@ class App:
             s = agg_fn()
             b = brk_fn()
             sb = src_fn()
-            lbl_requests.config(text=f"请求数  {fmt_int(s['requests'])}")
-            lbl_input.config(text=f"输入  {fmt_int(s['cache_hit'] + s['cache_miss'])}"
-                                   f"（命中 {fmt_int(s['cache_hit'])}）")
-            lbl_output.config(text=f"输出  {fmt_int(s['completion'])}")
-            lbl_cost.config(text=f"费用  {fmt_money(s['cost'])}")
+            set_strip(
+                fmt_int(s["requests"]),
+                "%s  (命中 %s)" % (fmt_int(s["cache_hit"] + s["cache_miss"]),
+                                   fmt_int(s["cache_hit"])),
+                fmt_int(s["completion"]),
+                fmt_money(s["cost"]),
+                cost_color=C_ORANGE_DEEP)
             self._fill_model_tree(tree, b)
             self._fill_source_tree(stree, sb)
 
@@ -1824,148 +1918,177 @@ class App:
 
     # ---------- 设置页 ----------
     def _add_settings_page(self, nb, index):
+        """设置页：卡片式分组布局（挂件 / 账户 / 数据源 / 维护）。"""
         page = tk.Frame(nb, bg=C_BG)
         nb.add(page, text="设置")
 
-        left = tk.Frame(page, bg=C_BG)
-        left.pack(side="left", fill="both", expand=True, padx=14, pady=12)
+        # 外层可滚动容器：窗口小的时候也能看到全部设置
+        outer = tk.Frame(page, bg=C_BG)
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg=C_BG, highlightthickness=0)
+        vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        root_f = tk.Frame(canvas, bg=C_BG)
+        win = canvas.create_window((0, 0), window=root_f, anchor="nw")
 
-        # 桌面挂件：总开关 + 形态（悬浮窗 / 桌宠）二选一
+        def _on_conf(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(win, width=canvas.winfo_width())
+
+        root_f.bind("<Configure>", _on_conf)
+        canvas.bind("<Configure>", _on_conf)
+        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(
+            int(-1 * (e.delta / 120)), "units"))
+
+        # 两栏：左为主设置，右为单价表
+        cols = tk.Frame(root_f, bg=C_BG)
+        cols.pack(fill="both", expand=True, padx=16, pady=14)
+        left = tk.Frame(cols, bg=C_BG)
+        left.pack(side="left", fill="both", expand=True)
+        right = tk.Frame(cols, bg=C_BG, width=430)
+        right.pack(side="right", fill="y", padx=(14, 0))
+        right.pack_propagate(False)
+
+        # ===== 卡片 1：桌面挂件 =====
+        _c, b = self._card(left, "桌面挂件", "悬浮球或桌宠，常驻显示今日用量")
         self.float_var = tk.BooleanVar(value=bool(self.settings.get("float_window", True)))
-        ttk.Checkbutton(left, text="显示桌面挂件", variable=self.float_var,
-                        command=self._toggle_float).pack(anchor="w", pady=(0, 4))
+        _r, holder = self._setting_row(b, "开关", label_width=8)
+        ttk.Checkbutton(holder, text="在桌面上显示", variable=self.float_var,
+                        command=self._toggle_float).pack(side="left")
+        _r, holder = self._setting_row(b, "形态", label_width=8)
         self.form_var = tk.StringVar(value=self.settings.get("display_form", "float"))
-        form_row = tk.Frame(left, bg=C_BG)
-        form_row.pack(anchor="w", pady=(0, 10))
-        ttk.Radiobutton(form_row, text="悬浮窗", value="float", variable=self.form_var,
-                        command=lambda: self._toggle_form("float")).pack(side="left", padx=(0, 8))
-        ttk.Radiobutton(form_row, text="桌宠", value="pet", variable=self.form_var,
-                        command=lambda: self._toggle_form("pet")).pack(side="left")
+        ttk.Radiobutton(holder, text="悬浮窗", value="float", variable=self.form_var,
+                        command=lambda: self._toggle_form("float")).pack(side="left")
+        ttk.Radiobutton(holder, text="桌宠", value="pet", variable=self.form_var,
+                        command=lambda: self._toggle_form("pet")).pack(side="left", padx=(16, 0))
 
-        # 余额刷新间隔
-        row = tk.Frame(left, bg=C_BG)
-        row.pack(anchor="w", pady=(0, 10))
-        tk.Label(row, text="余额刷新间隔(秒):", bg=C_BG, fg=C_TEXT,
-                 font=(FONT, 10)).pack(side="left")
-        self.refresh_var = tk.StringVar(
-            value=str(self.config.get("balance_refresh_seconds", 300)))
-        ttk.Entry(row, textvariable=self.refresh_var, width=8).pack(side="left", padx=6)
-        ttk.Button(row, text="保存", command=self._save_refresh_interval).pack(side="left")
-
-        # API Key（可在软件内修改，无需编辑配置文件）
-        key_box = tk.Frame(left, bg=C_BG)
-        key_box.pack(anchor="w", pady=(0, 10))
-        tk.Label(key_box, text="API Key:", bg=C_BG, fg=C_TEXT, font=(FONT, 10)).pack(side="left")
+        # ===== 卡片 2：账户与刷新 =====
+        _c, b = self._card(left, "账户", "用于查询官方余额（不影响用量统计）")
+        _r, holder = self._setting_row(b, "API Key", label_width=8)
         self.key_var = tk.StringVar(value=(self.config.get("api_key") or ""))
         self.key_show_var = tk.BooleanVar(value=False)
-        self.key_entry = ttk.Entry(key_box, textvariable=self.key_var, width=32, show="*")
-        self.key_entry.pack(side="left", padx=(6, 4))
+        self.key_entry = ttk.Entry(holder, textvariable=self.key_var, width=34, show="*")
+        self.key_entry.pack(side="left")
         self.key_show_var.trace_add("write", self._toggle_key_show)
-        ttk.Checkbutton(key_box, text="显示", variable=self.key_show_var).pack(side="left")
-        ttk.Button(key_box, text="保存 Key", command=self._save_api_key).pack(
-            side="left", padx=(6, 0))
+        ttk.Checkbutton(holder, text="显示", variable=self.key_show_var).pack(
+            side="left", padx=(8, 0))
+        ttk.Button(holder, text="保存", command=self._save_api_key).pack(
+            side="left", padx=(8, 0))
 
-        # 数据源开关（六个数据源全部保留，可分别开关，修改即时生效）
-        tk.Label(left, text="数据源开关:", bg=C_BG, fg=C_BROWN_DARK,
-                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 4))
+        _r, holder = self._setting_row(b, "余额刷新", "每隔多久调用一次官方余额接口",
+                                       label_width=8)
+        self.refresh_var = tk.StringVar(
+            value=str(self.config.get("balance_refresh_seconds", 300)))
+        ttk.Entry(holder, textvariable=self.refresh_var, width=8).pack(side="left")
+        tk.Label(holder, text="秒", bg=C_CARD, fg=C_SUB, font=(FONT, 9)).pack(
+            side="left", padx=(4, 8))
+        ttk.Button(holder, text="保存", command=self._save_refresh_interval).pack(side="left")
+
+        # ===== 卡片 3：数据源 =====
+        _c, b = self._card(left, "数据源", "各自独立开关，修改即时生效")
         self.proxy_var = tk.BooleanVar(value=bool(self.config.get("proxy_enabled", True)))
-        ttk.Checkbutton(left, text="本地代理 (127.0.0.1:8787)", variable=self.proxy_var,
-                        command=self._toggle_proxy).pack(anchor="w", pady=(0, 4))
         self.cc_var = tk.BooleanVar(
             value=bool((self.config.get("cc_switch") or {}).get("enabled", True)))
-        ttk.Checkbutton(left, text="CC Switch 同步", variable=self.cc_var,
-                        command=self._toggle_cc).pack(anchor="w", pady=(0, 4))
         self.dsh_var = tk.BooleanVar(
             value=bool((self.config.get("dsh") or {}).get("enabled", True)))
-        ttk.Checkbutton(left, text="DSH Harness 同步", variable=self.dsh_var,
-                        command=self._toggle_dsh).pack(anchor="w", pady=(0, 4))
         self.codebuddy_var = tk.BooleanVar(
             value=bool((self.config.get("codebuddy") or {}).get("enabled", True)))
-        ttk.Checkbutton(left, text="CodeBuddy 同步", variable=self.codebuddy_var,
-                        command=self._toggle_codebuddy).pack(anchor="w", pady=(0, 4))
         self.workbuddy_var = tk.BooleanVar(
             value=bool((self.config.get("workbuddy") or {}).get("enabled", True)))
-        ttk.Checkbutton(left, text="WorkBuddy 同步", variable=self.workbuddy_var,
-                        command=self._toggle_workbuddy).pack(anchor="w", pady=(0, 10))
 
-        # 代理状态
-        self.lbl_setting_proxy = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_setting_proxy.pack(anchor="w", pady=(0, 6))
-        # CC Switch 数据同步状态
-        self.lbl_ccsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_ccsync.pack(anchor="w", pady=(0, 6))
-        # DSH Harness 数据同步状态
-        self.lbl_dshsync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_dshsync.pack(anchor="w", pady=(0, 6))
-        # CodeBuddy 数据同步状态
-        self.lbl_codebuddysync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_codebuddysync.pack(anchor="w", pady=(0, 6))
-        # WorkBuddy 数据同步状态
-        self.lbl_workbuddysync = tk.Label(left, text="", bg=C_BG, fg=C_TEXT, font=(FONT, 10))
-        self.lbl_workbuddysync.pack(anchor="w", pady=(0, 6))
+        # 开关与状态并排：左边勾选框，右边实时状态点
+        self._src_status = {}
+        for key, text, var, cmd in (
+            ("proxy", "本地代理  127.0.0.1:8787", self.proxy_var, self._toggle_proxy),
+            ("cc_sync", "CC Switch 同步", self.cc_var, self._toggle_cc),
+            ("dsh_sync", "DSH Harness 同步", self.dsh_var, self._toggle_dsh),
+            ("codebuddy_sync", "CodeBuddy 同步", self.codebuddy_var, self._toggle_codebuddy),
+            ("workbuddy_sync", "WorkBuddy 同步", self.workbuddy_var, self._toggle_workbuddy),
+        ):
+            r = tk.Frame(b, bg=C_CARD)
+            r.pack(fill="x", pady=1)
+            ttk.Checkbutton(r, text=text, variable=var, command=cmd).pack(side="left")
+            # 右侧：状态文字 + 圆点（直接保存 canvas 引用，避免遍历查找）
+            lbl = tk.Label(r, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8))
+            lbl.pack(side="right", padx=(6, 0))
+            cv = tk.Canvas(r, width=9, height=9, bg=C_CARD, highlightthickness=0)
+            cv.pack(side="right")
+            cv.create_oval(1, 1, 8, 8, fill=C_SUB, outline="", tags="dot")
+            self._src_status[key] = (cv, lbl)
 
-        # 操作按钮
-        ttk.Button(left, text="立即刷新余额", command=self._refresh_balance_now).pack(
-            anchor="w", fill="x", pady=2)
-        ttk.Button(left, text="检查更新", command=self._check_update_now).pack(
-            anchor="w", fill="x", pady=2)
-        # 更新检查状态（点击"发现新版本"可直接下载）
-        self.lbl_updcheck = tk.Label(left, text="", bg=C_BG, fg=C_SUB, font=(FONT, 9),
+        # 兼容旧代码引用的状态标签（refresh 里会更新它们，但不再直接显示）
+        self.lbl_setting_proxy = tk.Label(b, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8))
+        self.lbl_ccsync = tk.Label(b, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8))
+        self.lbl_dshsync = tk.Label(b, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8))
+        self.lbl_codebuddysync = tk.Label(b, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8))
+        self.lbl_workbuddysync = tk.Label(b, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8))
+
+        # ===== 卡片 4：维护 =====
+        _c, b = self._card(left, "维护")
+        btn_wrap = tk.Frame(b, bg=C_CARD)
+        btn_wrap.pack(fill="x")
+        for col in range(3):
+            btn_wrap.grid_columnconfigure(col, weight=1, uniform="m")
+        btns = (
+            ("立即刷新余额", self._refresh_balance_now),
+            ("检查更新", self._check_update_now),
+            ("重算历史费用", self._rebill_all),
+            ("打开 config.json", lambda: os.startfile(CONFIG_PATH)),
+            ("打开数据文件夹", lambda: os.startfile(DATA_DIR)),
+        )
+        for i, (text, cmd) in enumerate(btns):
+            ttk.Button(btn_wrap, text=text, command=cmd).grid(
+                row=i // 3, column=i % 3, sticky="ew", padx=3, pady=3)
+        self.lbl_updcheck = tk.Label(b, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8),
                                      cursor="hand2")
-        self.lbl_updcheck.pack(anchor="w", pady=(0, 6))
+        self.lbl_updcheck.pack(anchor="w", pady=(8, 0))
         self.lbl_updcheck.bind("<Button-1>", lambda e: self._on_update_click())
-        ttk.Button(left, text="按最新峰谷价重算历史费用", command=self._rebill_all).pack(
-            anchor="w", fill="x", pady=2)
-        ttk.Button(left, text="打开配置文件 config.json",
-                   command=lambda: os.startfile(CONFIG_PATH)).pack(anchor="w", fill="x", pady=2)
-        ttk.Button(left, text="打开数据文件夹",
-                   command=lambda: os.startfile(DATA_DIR)).pack(anchor="w", fill="x", pady=2)
 
-        tk.Label(left, text="提示：修改各模型单价请编辑 config.json 后重启程序；"
-                            "流式请求需开启 include_usage 才能统计 token。",
-                 bg=C_BG, fg=C_SUB, font=(FONT, 8), wraplength=360,
-                 justify="left").pack(anchor="w", pady=(12, 0))
+        tk.Label(b, text="修改模型单价请编辑 config.json 后重启；"
+                         "流式请求需开启 include_usage 才能统计 token。",
+                 bg=C_CARD, fg=C_SUB, font=(FONT, 8), wraplength=470,
+                 justify="left").pack(anchor="w", pady=(8, 0))
 
-        # 右侧：单价表 + 吉祥物
-        right = tk.Frame(page, bg=C_BG)
-        right.pack(side="right", fill="both", padx=(0, 14), pady=12)
-        tk.Label(right, text="内置单价（元/百万 tokens）", bg=C_BG, fg=C_BROWN_DARK,
-                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 4))
-        # 两档并列显示：空闲 / 高峰。数字由 pricing.get_price_pair 提供，
-        # 与实际计费同源，避免"显示旧价、实收新价"的偏差。
-        tree = ttk.Treeview(right, columns=("model", "hit", "miss", "out"),
-                            show="headings")
+        # ===== 右栏：内置单价表 =====
+        card = tk.Frame(right, bg=C_CARD, highlightbackground=C_BROWN_LIGHT,
+                        highlightthickness=1)
+        card.pack(fill="both", expand=True)
+        head = tk.Frame(card, bg=C_CARD)
+        head.pack(fill="x", padx=14, pady=(10, 0))
+        tk.Label(head, text="内置单价", bg=C_CARD, fg=C_BROWN_DARK,
+                 font=(FONT, 10, "bold")).pack(anchor="w")
+        lbl_band = tk.Label(head, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 8),
+                            anchor="w", justify="left", wraplength=390)
+        lbl_band.pack(anchor="w", pady=(2, 0))
+
+        tree = ttk.Treeview(card, columns=("model", "hit", "miss", "out"),
+                            show="headings", height=14)
         for col, text in zip(("model", "hit", "miss", "out"),
-                             ("模型", "输入·命中", "输入·未命中", "输出")):
+                             ("模型", "命中", "未命中", "输出")):
             tree.heading(col, text=text)
-        for col, width in zip(("model", "hit", "miss", "out"), (150, 150, 160, 130)):
+        for col, width in zip(("model", "hit", "miss", "out"), (150, 82, 88, 82)):
             tree.column(col, width=width, anchor="center" if col != "model" else "w")
+        tree.pack(fill="both", expand=True, padx=14, pady=(8, 14))
+        self._price_tree = tree
 
         def _fmt(off, peak, key):
-            """把同一档位的空闲/高峰数字格式化为 '空闲 / 高峰'。"""
             o = off.get(key)
             p = peak.get(key)
             if o is None:
                 return "-"
             if p is None or abs(float(p) - float(o)) < 1e-12:
-                return str(o)          # 该模型此档不分峰谷
+                return str(o)
             return "%s / %s" % (o, p)
 
         def _band_label():
-            """按当前时刻标注哪一档正在生效（工作日高峰 / 空闲）。"""
             try:
                 if pricing.is_peak_hour(datetime.now(), self.config):
-                    return "（当前为高峰时段，按右侧数字计费）"
-                return "（当前为空闲时段，按左侧数字计费）"
+                    return "空闲 / 高峰 · 当前为高峰时段（按右侧数字计费）"
+                return "空闲 / 高峰 · 当前为空闲时段（按左侧数字计费）"
             except Exception:
-                return ""
-
-        # pack 顺序即上下顺序：标题 → 档位说明 → 表格
-        lbl_band = tk.Label(right, text="空闲 / 高峰" + _band_label(), bg=C_BG, fg=C_SUB,
-                            font=(FONT, 8))
-        lbl_band.pack(anchor="w", pady=(0, 2))
-        tree.pack(fill="both", expand=True)
-        self._price_tree = tree
+                return "空闲 / 高峰"
 
         def refresh():
             for item in tree.get_children():
@@ -1973,7 +2096,7 @@ class App:
             now_ts = datetime.now()
             for model, entry in (self.config.get("models") or {}).items():
                 if (entry or {}).get("deprecated"):
-                    continue  # 已停用模型：价格仍保留供历史记录计费，但不在单价表展示
+                    continue
                 try:
                     off, peak = pricing.get_price_pair(model, self.config, now_ts)
                 except Exception:
@@ -1982,22 +2105,62 @@ class App:
                     model, _fmt(off, peak, "cache_hit"),
                     _fmt(off, peak, "cache_miss"), _fmt(off, peak, "output")))
             try:
-                lbl_band.config(text="空闲 / 高峰" + _band_label())
+                lbl_band.config(text=_band_label())
             except Exception:
                 pass
-            # 代理状态
+
+            # 状态文字（供勾选框右侧的状态点使用）
+            def _set(key, text, level):
+                """更新数据源开关右侧的状态文字与圆点颜色。"""
+                cv, lbl = self._src_status.get(key, (None, None))
+                colors = {"ok": "#3f9e5a", "warn": C_ORANGE_DEEP,
+                          "error": C_RED, "off": C_SUB}
+                color = colors.get(level, C_SUB)
+                try:
+                    if lbl is not None:
+                        lbl.config(text=text, fg=color)
+                except Exception:
+                    pass
+                try:
+                    if cv is not None:
+                        cv.itemconfig("dot", fill=color)
+                except Exception:
+                    pass
+
             if self.state.get("proxy_error"):
-                self.lbl_setting_proxy.config(text="本地代理：启动失败 " + self.state["proxy_error"],
-                                              fg=C_RED)
+                self.lbl_setting_proxy.config(text=str(self.state["proxy_error"]))
+                _set("proxy", "启动失败", "error")
             elif self.state.get("proxy_ready"):
                 port = self.config.get("proxy_port", 8787)
-                self.lbl_setting_proxy.config(text=f"本地代理：运行中 http://127.0.0.1:{port}",
-                                              fg=C_GREEN)
+                self.lbl_setting_proxy.config(text="运行中")
+                _set("proxy", "运行中 · %d" % port, "ok")
             else:
-                self.lbl_setting_proxy.config(text="本地代理：启动中...", fg=C_SUB)
+                self.lbl_setting_proxy.config(text="启动中…")
+                _set("proxy", "启动中…", "warn")
+
+            for key, attr in (("cc_sync", "lbl_ccsync"), ("dsh_sync", "lbl_dshsync"),
+                              ("codebuddy_sync", "lbl_codebuddysync"),
+                              ("workbuddy_sync", "lbl_workbuddysync")):
+                info = self.state.get(key) or {}
+                label = getattr(self, attr)
+                if not info or not info.get("enabled"):
+                    label.config(text="未启用")
+                    _set(key, "未启用", "off")
+                elif info.get("error"):
+                    label.config(text=str(info["error"]))
+                    _set(key, "读取失败", "error")
+                else:
+                    n = info.get("total_added", 0)
+                    t = info.get("last_time") or ""
+                    label.config(text="运行中")
+                    # 线程刚启动、还没跑完第一轮时 last_time 为空，
+                    # 此时只说"运行中"，不要显示 "· None"
+                    detail = ("累计 %s 条" % fmt_int(n)) + (" · " + t if t else "")
+                    _set(key, detail, "ok")
 
         refresh()
         return refresh
+
 
 
 
